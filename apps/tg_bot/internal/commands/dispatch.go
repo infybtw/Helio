@@ -25,7 +25,9 @@ var ownerCommands = map[string]handler{
 }
 
 // userCommands can be used by any group member.
-var userCommands = map[string]handler{}
+var userCommands = map[string]handler{
+	"!help": Help,
+}
 
 // Dispatch routes a message to the matching command handler based on the
 // first word of its text.

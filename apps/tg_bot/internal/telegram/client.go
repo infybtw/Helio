@@ -99,6 +99,23 @@ func (c *Client) DeleteWebhook(ctx context.Context, params DeleteWebhookParams) 
 	return c.call(ctx, "deleteWebhook", params, nil)
 }
 
+// SendMessageParams contains parameters for the sendMessage method.
+type SendMessageParams struct {
+	ChatID                int64  `json:"chat_id"`
+	Text                  string `json:"text"`
+	ReplyToMessageID      int64  `json:"reply_to_message_id,omitempty"`
+	DisableWebPagePreview bool   `json:"disable_web_page_preview,omitempty"`
+}
+
+// SendMessage sends a text message to a chat.
+func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, replyToMessageID int64) error {
+	return c.call(ctx, "sendMessage", SendMessageParams{
+		ChatID:           chatID,
+		Text:             text,
+		ReplyToMessageID: replyToMessageID,
+	}, nil)
+}
+
 // DeleteMessageParams contains parameters for the deleteMessage method.
 type DeleteMessageParams struct {
 	ChatID    int64 `json:"chat_id"`
