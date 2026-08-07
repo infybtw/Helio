@@ -46,14 +46,12 @@ const ownerCommands = [
           </div>
           <span class="text-lg font-semibold tracking-tight">HelioBot</span>
         </div>
-        <a
-          href="https://github.com/infybtw/Helio"
-          target="_blank"
-          rel="noopener"
+        <NuxtLink
+          to="/dashboard"
           class="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100"
         >
-          GitHub
-        </a>
+          Dashboard
+        </NuxtLink>
       </nav>
     </header>
 
