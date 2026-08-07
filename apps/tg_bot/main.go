@@ -13,6 +13,7 @@ import (
 
 	"tg_bot/internal/config"
 	"tg_bot/internal/handlers"
+	"tg_bot/internal/logger"
 	"tg_bot/internal/telegram"
 )
 
@@ -27,7 +28,7 @@ func main() {
 	case "error":
 		logLevel = slog.LevelError
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	logger := logger.New(os.Stdout, logLevel)
 
 	cfg, err := config.Load()
 	if err != nil {
