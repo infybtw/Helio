@@ -5,11 +5,11 @@ import (
 	"log/slog"
 	"strings"
 
-	"tg_bot/internal/store"
+	"tg_bot/internal/database"
 	"tg_bot/internal/telegram"
 )
 
-type handler func(ctx context.Context, client *telegram.Client, st *store.Store, msg *telegram.Message, log *slog.Logger)
+type handler func(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, log *slog.Logger)
 
 // adminCommands can be used by the group owner and users granted rights via !grant.
 var adminCommands = map[string]handler{
@@ -29,7 +29,7 @@ var userCommands = map[string]handler{}
 
 // Dispatch routes a message to the matching command handler based on the
 // first word of its text.
-func Dispatch(ctx context.Context, client *telegram.Client, st *store.Store, msg *telegram.Message, log *slog.Logger) {
+func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil {
 		return
 	}
@@ -96,7 +96,7 @@ func isGroupOwner(ctx context.Context, client *telegram.Client, msg *telegram.Me
 
 // isChatAdmin reports whether the message sender has been granted command
 // rights in the chat.
-func isChatAdmin(ctx context.Context, st *store.Store, msg *telegram.Message, log *slog.Logger) bool {
+func isChatAdmin(ctx context.Context, st database.Store, msg *telegram.Message, log *slog.Logger) bool {
 	ok, err := st.IsChatAdmin(ctx, msg.Chat.ID, msg.From.ID)
 	if err != nil {
 		log.Warn("failed to check command rights",

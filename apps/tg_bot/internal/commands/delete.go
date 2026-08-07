@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"strings"
 
-	"tg_bot/internal/store"
+	"tg_bot/internal/database"
 	"tg_bot/internal/telegram"
 )
 
 // Delete handles the !delete command.
 // It deletes the message that the command replies to, then deletes the command message itself.
-func Delete(ctx context.Context, client *telegram.Client, _ *store.Store, msg *telegram.Message, log *slog.Logger) {
+func Delete(ctx context.Context, client *telegram.Client, _ database.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil {
 		log.Warn("delete called with nil message or chat")
 		return

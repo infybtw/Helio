@@ -4,14 +4,14 @@ import (
 	"context"
 	"log/slog"
 
-	"tg_bot/internal/store"
+	"tg_bot/internal/database"
 	"tg_bot/internal/telegram"
 )
 
 // Grant handles the !grant command.
 // It grants command rights in the chat to the author of the replied-to message,
 // then deletes the command message itself.
-func Grant(ctx context.Context, client *telegram.Client, st *store.Store, msg *telegram.Message, log *slog.Logger) {
+func Grant(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil || msg.From == nil {
 		log.Warn("grant called with nil message, chat or sender")
 		return
@@ -65,7 +65,7 @@ func Grant(ctx context.Context, client *telegram.Client, st *store.Store, msg *t
 // Revoke handles the !revoke command.
 // It revokes command rights in the chat from the author of the replied-to
 // message, then deletes the command message itself.
-func Revoke(ctx context.Context, client *telegram.Client, st *store.Store, msg *telegram.Message, log *slog.Logger) {
+func Revoke(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil || msg.From == nil {
 		log.Warn("revoke called with nil message, chat or sender")
 		return

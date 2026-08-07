@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tg_bot/internal/commands"
-	"tg_bot/internal/store"
+	"tg_bot/internal/database"
 	"tg_bot/internal/telegram"
 )
 
@@ -17,16 +17,16 @@ const secretTokenHeader = "X-Telegram-Bot-Api-Secret-Token"
 // Webhook processes incoming Telegram webhook updates.
 type Webhook struct {
 	client *telegram.Client
-	store  *store.Store
+	db     database.Store
 	secret string
 	log    *slog.Logger
 }
 
 // NewWebhook creates a new webhook handler.
-func NewWebhook(client *telegram.Client, st *store.Store, secret string, log *slog.Logger) *Webhook {
+func NewWebhook(client *telegram.Client, st database.Store, secret string, log *slog.Logger) *Webhook {
 	return &Webhook{
 		client: client,
-		store:  st,
+		db:     st,
 		secret: secret,
 		log:    log,
 	}
@@ -70,7 +70,7 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.Message.Chat.Type,
 			"text", update.Message.Text,
 		)
-		commands.Dispatch(ctx, w.client, w.store, update.Message, w.log)
+		commands.Dispatch(ctx, w.client, w.db, update.Message, w.log)
 	case update.EditedMessage != nil:
 		w.log.Info("dispatching to edited message handler",
 			"update_id", update.UpdateID,
@@ -79,6 +79,6 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.EditedMessage.Chat.Type,
 			"text", update.EditedMessage.Text,
 		)
-		commands.Dispatch(ctx, w.client, w.store, update.EditedMessage, w.log)
+		commands.Dispatch(ctx, w.client, w.db, update.EditedMessage, w.log)
 	}
 }
