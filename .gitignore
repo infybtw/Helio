@@ -1,0 +1,57 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+
+# Go
+go.work.sum
+vendor/
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+/build/
+/dist/
+/tmp/
+/bin/
+
+# Test & coverage
+coverage.*
+*.coverprofile
+
+# Docker
+docker-compose.override.yml
+
+# Air (hot reload)
+.air.toml
+air.log
+
+# Local config
+config.local.*
+*.local.json
