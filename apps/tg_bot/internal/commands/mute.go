@@ -15,7 +15,8 @@ const defaultMuteDuration = 30 * time.Minute
 
 // Mute handles the !mute command.
 // It mutes the author of the replied-to message for the given duration
-// (default 30 minutes), then deletes the command message itself.
+// (default 30 minutes), deletes the replied-to message, then deletes the
+// command message itself.
 func Mute(ctx context.Context, client *telegram.Client, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil {
 		log.Warn("mute called with nil message or chat")
@@ -88,6 +89,14 @@ func Mute(ctx context.Context, client *telegram.Client, msg *telegram.Message, l
 		)
 	}
 
+	if err := client.DeleteMessage(ctx, chatID, msg.ReplyToMessage.MessageID); err != nil {
+		log.Error("failed to delete replied message",
+			"chat_id", chatID,
+			"message_id", msg.ReplyToMessage.MessageID,
+			"error", err,
+		)
+	}
+
 	if err := client.DeleteMessage(ctx, chatID, msg.MessageID); err != nil {
 		log.Error("failed to delete command message",
 			"chat_id", chatID,
@@ -97,12 +106,19 @@ func Mute(ctx context.Context, client *telegram.Client, msg *telegram.Message, l
 	}
 }
 
-// parseDuration parses a duration string. It accepts Go duration syntax
-// (e.g. "30m", "1h30m") and additionally supports a "d" suffix for days
-// (e.g. "1d", "2d12h").
+// parseDuration parses a duration string. It accepts a bare number of minutes
+// (e.g. "30"), Go duration syntax (e.g. "30m", "1h30m") and additionally a "d"
+// suffix for days (e.g. "1d", "2d12h").
 func parseDuration(s string) (time.Duration, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return d, nil
+	}
+
+	if minutes, err := strconv.Atoi(s); err == nil {
+		if minutes <= 0 {
+			return 0, fmt.Errorf("duration must be positive: %q", s)
+		}
+		return time.Duration(minutes) * time.Minute, nil
 	}
 
 	if idx := strings.Index(s, "d"); idx > 0 {
