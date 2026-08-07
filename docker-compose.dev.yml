@@ -1,4 +1,11 @@
 services:
+  web:
+    build:
+      context: ./apps/web
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
   tg_bot:
     build:
       context: ./apps/tg_bot
