@@ -67,7 +67,7 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.Message.Chat.Type,
 			"text", update.Message.Text,
 		)
-		commands.Delete(ctx, w.client, update.Message, w.log)
+		commands.Dispatch(ctx, w.client, update.Message, w.log)
 	case update.EditedMessage != nil:
 		w.log.Info("dispatching to edited message handler",
 			"update_id", update.UpdateID,
@@ -76,6 +76,6 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.EditedMessage.Chat.Type,
 			"text", update.EditedMessage.Text,
 		)
-		commands.Delete(ctx, w.client, update.EditedMessage, w.log)
+		commands.Dispatch(ctx, w.client, update.EditedMessage, w.log)
 	}
 }

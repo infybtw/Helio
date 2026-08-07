@@ -110,6 +110,61 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) err
 	return c.call(ctx, "deleteMessage", DeleteMessageParams{ChatID: chatID, MessageID: messageID}, nil)
 }
 
+// RestrictChatMemberParams contains parameters for the restrictChatMember method.
+type RestrictChatMemberParams struct {
+	ChatID      int64            `json:"chat_id"`
+	UserID      int64            `json:"user_id"`
+	Permissions ChatPermissions  `json:"permissions"`
+	UntilDate   int64            `json:"until_date,omitempty"`
+}
+
+// ChatPermissions describes actions that a non-administrator user is allowed to take in a chat.
+type ChatPermissions struct {
+	CanSendMessages       bool `json:"can_send_messages"`
+	CanSendAudios         bool `json:"can_send_audios"`
+	CanSendDocuments      bool `json:"can_send_documents"`
+	CanSendPhotos         bool `json:"can_send_photos"`
+	CanSendVideos         bool `json:"can_send_videos"`
+	CanSendVideoNotes     bool `json:"can_send_video_notes"`
+	CanSendVoiceNotes     bool `json:"can_send_voice_notes"`
+	CanSendPolls          bool `json:"can_send_polls"`
+	CanSendOtherMessages  bool `json:"can_send_other_messages"`
+	CanAddWebPagePreviews bool `json:"can_add_web_page_previews"`
+}
+
+// MutePermissions denies all sending permissions (a full mute).
+var MutePermissions = ChatPermissions{}
+
+// RestrictChatMember restricts a user in a chat. untilDate is a unix timestamp;
+// use 0 to restrict forever.
+func (c *Client) RestrictChatMember(ctx context.Context, chatID, userID int64, permissions ChatPermissions, untilDate int64) error {
+	return c.call(ctx, "restrictChatMember", RestrictChatMemberParams{
+		ChatID:      chatID,
+		UserID:      userID,
+		Permissions: permissions,
+		UntilDate:   untilDate,
+	}, nil)
+}
+
+// BanChatMemberParams contains parameters for the banChatMember method.
+type BanChatMemberParams struct {
+	ChatID         int64 `json:"chat_id"`
+	UserID         int64 `json:"user_id"`
+	UntilDate      int64 `json:"until_date,omitempty"`
+	RevokeMessages bool  `json:"revoke_messages,omitempty"`
+}
+
+// BanChatMember bans a user in a chat. untilDate is a unix timestamp; use 0 to
+// ban forever. If revokeMessages is true, all messages from the user are deleted.
+func (c *Client) BanChatMember(ctx context.Context, chatID, userID int64, untilDate int64, revokeMessages bool) error {
+	return c.call(ctx, "banChatMember", BanChatMemberParams{
+		ChatID:         chatID,
+		UserID:         userID,
+		UntilDate:      untilDate,
+		RevokeMessages: revokeMessages,
+	}, nil)
+}
+
 // GetMe returns information about the bot itself.
 func (c *Client) GetMe(ctx context.Context) (*User, error) {
 	var user User
