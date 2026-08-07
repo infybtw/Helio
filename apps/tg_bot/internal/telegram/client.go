@@ -165,6 +165,21 @@ func (c *Client) BanChatMember(ctx context.Context, chatID, userID int64, untilD
 	}, nil)
 }
 
+// GetChatMemberParams contains parameters for the getChatMember method.
+type GetChatMemberParams struct {
+	ChatID int64 `json:"chat_id"`
+	UserID int64 `json:"user_id"`
+}
+
+// GetChatMember returns information about a member of a chat.
+func (c *Client) GetChatMember(ctx context.Context, chatID, userID int64) (*ChatMember, error) {
+	var member ChatMember
+	if err := c.call(ctx, "getChatMember", GetChatMemberParams{ChatID: chatID, UserID: userID}, &member); err != nil {
+		return nil, err
+	}
+	return &member, nil
+}
+
 // GetMe returns information about the bot itself.
 func (c *Client) GetMe(ctx context.Context) (*User, error) {
 	var user User

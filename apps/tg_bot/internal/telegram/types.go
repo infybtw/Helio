@@ -58,6 +58,12 @@ type CallbackQuery struct {
 	Data    string   `json:"data,omitempty"`
 }
 
+// ChatMember represents a chat member.
+type ChatMember struct {
+	Status string `json:"status"`
+	User   *User  `json:"user"`
+}
+
 // APIResponse is the generic response wrapper for the Telegram Bot API.
 type APIResponse struct {
 	OK          bool            `json:"ok"`
