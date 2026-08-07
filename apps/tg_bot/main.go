@@ -14,6 +14,7 @@ import (
 	"tg_bot/internal/config"
 	"tg_bot/internal/handlers"
 	"tg_bot/internal/logger"
+	"tg_bot/internal/store"
 	"tg_bot/internal/telegram"
 )
 
@@ -41,6 +42,14 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	st, err := store.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+	logger.Info("connected to database")
+
 	// Validate token and optionally log bot identity.
 	me, err := client.GetMe(ctx)
 	if err != nil {
@@ -66,7 +75,7 @@ func main() {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
-	webhook := handlers.NewWebhook(client, cfg.WebhookSecret, logger)
+	webhook := handlers.NewWebhook(client, st, cfg.WebhookSecret, logger)
 	router.POST(cfg.WebhookPath, webhook.Handle)
 
 	router.GET("/health", func(c *gin.Context) {

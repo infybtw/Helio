@@ -5,13 +5,14 @@ import (
 	"log/slog"
 	"strings"
 
+	"tg_bot/internal/store"
 	"tg_bot/internal/telegram"
 )
 
 // Ban handles the !ban command.
 // It bans the author of the replied-to message from the chat, deletes the
 // replied-to message, then deletes the command message itself.
-func Ban(ctx context.Context, client *telegram.Client, msg *telegram.Message, log *slog.Logger) {
+func Ban(ctx context.Context, client *telegram.Client, _ *store.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil {
 		log.Warn("ban called with nil message or chat")
 		return

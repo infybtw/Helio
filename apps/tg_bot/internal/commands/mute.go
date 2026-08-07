@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"tg_bot/internal/store"
 	"tg_bot/internal/telegram"
 )
 
@@ -17,7 +18,7 @@ const defaultMuteDuration = 30 * time.Minute
 // It mutes the author of the replied-to message for the given duration
 // (default 30 minutes), deletes the replied-to message, then deletes the
 // command message itself.
-func Mute(ctx context.Context, client *telegram.Client, msg *telegram.Message, log *slog.Logger) {
+func Mute(ctx context.Context, client *telegram.Client, _ *store.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil {
 		log.Warn("mute called with nil message or chat")
 		return

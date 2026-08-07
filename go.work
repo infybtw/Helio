@@ -1,3 +1,6 @@
 go 1.26.5
 
-use ./apps/tg_bot
+use (
+	./apps/migrations
+	./apps/tg_bot
+)

@@ -15,6 +15,7 @@ type Config struct {
 	WebhookSecret  string
 	WebhookPath    string
 	Port           string
+	DatabaseURL    string
 	AllowedUpdates []string
 }
 
@@ -44,6 +45,7 @@ func Load() (*Config, error) {
 		WebhookSecret:  os.Getenv("WEBHOOK_SECRET"),
 		WebhookPath:    webhookPath,
 		Port:           port,
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
 		AllowedUpdates: allowed,
 	}
 
@@ -52,6 +54,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.WebhookURL == "" {
 		return nil, fmt.Errorf("WEBHOOK_URL is required")
+	}
+	if cfg.DatabaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
 
 	return cfg, nil

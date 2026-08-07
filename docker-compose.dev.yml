@@ -6,19 +6,31 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-heliobot}:${POSTGRES_PASSWORD:-heliobot}@postgres:5432/${POSTGRES_DB:-heliobot}
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  migrations:
+    build:
+      context: ./apps/migrations
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-heliobot}:${POSTGRES_PASSWORD:-heliobot}@postgres:5432/${POSTGRES_DB:-heliobot}
     depends_on:
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   postgres:
     image: postgres:17-alpine
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: heliobot
-      POSTGRES_PASSWORD: heliobot
-      POSTGRES_DB: heliobot
+      POSTGRES_USER: ${POSTGRES_USER:-heliobot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heliobot}
+      POSTGRES_DB: ${POSTGRES_DB:-heliobot}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

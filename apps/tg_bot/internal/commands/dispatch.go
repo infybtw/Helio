@@ -5,16 +5,23 @@ import (
 	"log/slog"
 	"strings"
 
+	"tg_bot/internal/store"
 	"tg_bot/internal/telegram"
 )
 
-type handler func(ctx context.Context, client *telegram.Client, msg *telegram.Message, log *slog.Logger)
+type handler func(ctx context.Context, client *telegram.Client, st *store.Store, msg *telegram.Message, log *slog.Logger)
 
-// adminCommands can be used only by the group owner.
+// adminCommands can be used by the group owner and users granted rights via !grant.
 var adminCommands = map[string]handler{
 	"!delete": Delete,
 	"!mute":   Mute,
 	"!ban":    Ban,
+}
+
+// ownerCommands can be used only by the group owner.
+var ownerCommands = map[string]handler{
+	"!grant":  Grant,
+	"!revoke": Revoke,
 }
 
 // userCommands can be used by any group member.
@@ -22,7 +29,7 @@ var userCommands = map[string]handler{}
 
 // Dispatch routes a message to the matching command handler based on the
 // first word of its text.
-func Dispatch(ctx context.Context, client *telegram.Client, msg *telegram.Message, log *slog.Logger) {
+func Dispatch(ctx context.Context, client *telegram.Client, st *store.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil {
 		return
 	}
@@ -35,7 +42,19 @@ func Dispatch(ctx context.Context, client *telegram.Client, msg *telegram.Messag
 	command := strings.ToLower(fields[0])
 
 	if h, ok := userCommands[command]; ok {
-		h(ctx, client, msg, log)
+		h(ctx, client, st, msg, log)
+		return
+	}
+
+	if h, ok := ownerCommands[command]; ok {
+		if msg.From == nil || msg.Chat == nil {
+			return
+		}
+		if !isGroupOwner(ctx, client, msg, log) {
+			logUnauthorized(log, command, msg)
+			return
+		}
+		h(ctx, client, st, msg, log)
 		return
 	}
 
@@ -43,25 +62,25 @@ func Dispatch(ctx context.Context, client *telegram.Client, msg *telegram.Messag
 		if msg.From == nil || msg.Chat == nil {
 			return
 		}
-		if !isGroupOwner(ctx, client, msg, log) {
-			log.Warn("ignoring admin command from non-owner",
-				"command", command,
-				"chat_id", msg.Chat.ID,
-				"user_id", msg.From.ID,
-				"username", msg.From.Username,
-			)
+		if !isGroupOwner(ctx, client, msg, log) && !isChatAdmin(ctx, st, msg, log) {
+			logUnauthorized(log, command, msg)
 			return
 		}
-		h(ctx, client, msg, log)
+		h(ctx, client, st, msg, log)
 	}
+}
+
+func logUnauthorized(log *slog.Logger, command string, msg *telegram.Message) {
+	log.Warn("ignoring command from unauthorized user",
+		"command", command,
+		"chat_id", msg.Chat.ID,
+		"user_id", msg.From.ID,
+		"username", msg.From.Username,
+	)
 }
 
 // isGroupOwner reports whether the message sender is the owner of the chat.
 func isGroupOwner(ctx context.Context, client *telegram.Client, msg *telegram.Message, log *slog.Logger) bool {
-	if msg.From == nil || msg.Chat == nil {
-		return false
-	}
-
 	member, err := client.GetChatMember(ctx, msg.Chat.ID, msg.From.ID)
 	if err != nil {
 		log.Warn("failed to get chat member",
@@ -73,4 +92,20 @@ func isGroupOwner(ctx context.Context, client *telegram.Client, msg *telegram.Me
 	}
 
 	return member.Status == "creator"
+}
+
+// isChatAdmin reports whether the message sender has been granted command
+// rights in the chat.
+func isChatAdmin(ctx context.Context, st *store.Store, msg *telegram.Message, log *slog.Logger) bool {
+	ok, err := st.IsChatAdmin(ctx, msg.Chat.ID, msg.From.ID)
+	if err != nil {
+		log.Warn("failed to check command rights",
+			"error", err,
+			"chat_id", msg.Chat.ID,
+			"user_id", msg.From.ID,
+		)
+		return false
+	}
+
+	return ok
 }
