@@ -275,6 +275,10 @@ func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]d
 		if err != nil {
 			return nil, err
 		}
+		command.Aliases, err = p.listCustomCommandAliases(ctx, command.ID)
+		if err != nil {
+			return nil, err
+		}
 		commands = append(commands, command)
 	}
 	if err := rows.Err(); err != nil {
@@ -283,7 +287,7 @@ func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]d
 	return commands, nil
 }
 
-func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, actions []database.CustomCommandAction) (database.CustomCommand, error) {
+func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, aliases []string, actions []database.CustomCommandAction) (database.CustomCommand, error) {
 	var command database.CustomCommand
 	var createdAt time.Time
 	tx, err := p.pool.Begin(ctx)
@@ -301,15 +305,19 @@ func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy in
 	if err := insertCustomCommandActions(ctx, tx, command.ID, actions); err != nil {
 		return command, err
 	}
+	if err := insertCustomCommandAliases(ctx, tx, command.ID, chatID, aliases); err != nil {
+		return command, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return command, fmt.Errorf("commit custom command transaction: %w", err)
 	}
 	command.CreatedAt = createdAt.Format(time.RFC3339)
 	command.Actions = actions
+	command.Aliases = aliases
 	return command, nil
 }
 
-func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, actions []database.CustomCommandAction) (database.CustomCommand, bool, error) {
+func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, aliases []string, actions []database.CustomCommandAction) (database.CustomCommand, bool, error) {
 	var command database.CustomCommand
 	var createdAt time.Time
 	if len(chatIDs) == 0 {
@@ -337,11 +345,18 @@ func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, ch
 	if err := insertCustomCommandActions(ctx, tx, id, actions); err != nil {
 		return command, false, err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM custom_command_aliases WHERE command_id = $1`, id); err != nil {
+		return command, false, fmt.Errorf("delete custom command aliases: %w", err)
+	}
+	if err := insertCustomCommandAliases(ctx, tx, id, chatID, aliases); err != nil {
+		return command, false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return command, false, fmt.Errorf("commit custom command transaction: %w", err)
 	}
 	command.CreatedAt = createdAt.Format(time.RFC3339)
 	command.Actions = actions
+	command.Aliases = aliases
 	return command, true, nil
 }
 
@@ -381,7 +396,11 @@ func (p *Postgres) FindCustomCommand(ctx context.Context, chatID int64, name str
 	var createdAt time.Time
 	err := p.pool.QueryRow(ctx, `
 		SELECT id, chat_id, name, enabled, permission, created_at
-		FROM custom_commands WHERE chat_id = $1 AND name = $2 AND enabled = TRUE`, chatID, name).
+		FROM custom_commands c
+		WHERE c.chat_id = $1 AND c.enabled = TRUE
+		  AND (c.name = $2 OR EXISTS (SELECT 1 FROM custom_command_aliases ca WHERE ca.command_id = c.id AND ca.chat_id = $1 AND ca.alias = $2))
+		ORDER BY CASE WHEN c.name = $2 THEN 0 ELSE 1 END
+		LIMIT 1`, chatID, name).
 		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
 	if err == pgx.ErrNoRows {
 		return command, false, nil
@@ -394,7 +413,40 @@ func (p *Postgres) FindCustomCommand(ctx context.Context, chatID int64, name str
 	if err != nil {
 		return command, false, err
 	}
+	command.Aliases, err = p.listCustomCommandAliases(ctx, command.ID)
+	if err != nil {
+		return command, false, err
+	}
 	return command, true, nil
+}
+
+func (p *Postgres) listCustomCommandAliases(ctx context.Context, commandID int64) ([]string, error) {
+	rows, err := p.pool.Query(ctx, `SELECT alias FROM custom_command_aliases WHERE command_id = $1 ORDER BY alias`, commandID)
+	if err != nil {
+		return nil, fmt.Errorf("list custom command aliases: %w", err)
+	}
+	defer rows.Close()
+	aliases := make([]string, 0)
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			return nil, fmt.Errorf("scan custom command alias: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate custom command aliases: %w", err)
+	}
+	return aliases, nil
+}
+
+func insertCustomCommandAliases(ctx context.Context, tx pgx.Tx, commandID, chatID int64, aliases []string) error {
+	for _, alias := range aliases {
+		if _, err := tx.Exec(ctx, `INSERT INTO custom_command_aliases (command_id, chat_id, alias) VALUES ($1, $2, $3)`, commandID, chatID, alias); err != nil {
+			return fmt.Errorf("create custom command alias: %w", err)
+		}
+	}
+	return nil
 }
 
 func (p *Postgres) listCustomCommandActions(ctx context.Context, commandID int64) ([]database.CustomCommandAction, error) {

@@ -67,6 +67,7 @@ type CustomCommand struct {
 	ID         int64                 `json:"id"`
 	ChatID     int64                 `json:"chat_id"`
 	Name       string                `json:"name"`
+	Aliases    []string              `json:"aliases"`
 	Actions    []CustomCommandAction `json:"actions"`
 	Enabled    bool                  `json:"enabled"`
 	Permission string                `json:"permission"`
@@ -99,8 +100,8 @@ type Store interface {
 	DashboardData(ctx context.Context, chatIDs []int64) (DashboardData, error)
 	ListActivity(ctx context.Context, chatIDs []int64, eventType string, limit, offset int) (ActivityPage, error)
 	ListCustomCommands(ctx context.Context, chatIDs []int64) ([]CustomCommand, error)
-	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, actions []CustomCommandAction) (CustomCommand, error)
-	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, actions []CustomCommandAction) (CustomCommand, bool, error)
+	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, aliases []string, actions []CustomCommandAction) (CustomCommand, error)
+	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, aliases []string, actions []CustomCommandAction) (CustomCommand, bool, error)
 	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (CustomCommand, bool, error)
 	SetCustomCommandEnabled(ctx context.Context, id int64, enabled bool, chatIDs []int64) (bool, error)
 	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
