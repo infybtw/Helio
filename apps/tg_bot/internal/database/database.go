@@ -68,6 +68,7 @@ type CustomCommand struct {
 	ChatID    int64                 `json:"chat_id"`
 	Name      string                `json:"name"`
 	Actions   []CustomCommandAction `json:"actions"`
+	Enabled   bool                  `json:"enabled"`
 	CreatedAt string                `json:"created_at"`
 }
 
@@ -100,6 +101,7 @@ type Store interface {
 	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name string, actions []CustomCommandAction) (CustomCommand, error)
 	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name string, actions []CustomCommandAction) (CustomCommand, bool, error)
 	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (CustomCommand, bool, error)
+	SetCustomCommandEnabled(ctx context.Context, id int64, enabled bool, chatIDs []int64) (bool, error)
 	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
 	// Close releases database resources.
 	Close()

@@ -399,6 +399,36 @@ func (a *Auth) DeleteCommand(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (a *Auth) SetCommandEnabled(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command id"})
+		return
+	}
+	var request struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	updated, err := a.db.SetCustomCommandEnabled(c.Request.Context(), id, request.Enabled, chatIDs)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to update command status"})
+		return
+	}
+	if !updated {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": request.Enabled})
+}
+
 func (a *Auth) recordCommandActivity(c *gin.Context, command database.CustomCommand, event string) {
 	session := SessionFromContext(c)
 	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{

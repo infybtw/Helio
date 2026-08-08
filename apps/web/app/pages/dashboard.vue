@@ -31,6 +31,7 @@ interface CustomCommand {
   chat_id: number
   name: string
   actions: CustomCommandAction[]
+  enabled: boolean
   created_at: string
 }
 interface CustomCommandAction {
@@ -262,6 +263,17 @@ async function deleteCommand(id: number) {
   }
 }
 
+async function toggleCommand(command: CustomCommand) {
+  commandListError.value = null
+  const enabled = !command.enabled
+  try {
+    await $fetch(`${baseURL}/api/dashboard/commands/${command.id}/enabled`, { method: 'PATCH', credentials: 'include', body: { enabled } })
+    command.enabled = enabled
+  } catch {
+    commandListError.value = 'Не удалось изменить статус команды.'
+  }
+}
+
 function openCreateCommand() {
   editingCommandID.value = null
   commandName.value = ''
@@ -471,12 +483,10 @@ onUnmounted(() => {
                 </div>
                 <p v-if="commandListError" class="mb-3 text-xs text-rose-300">{{ commandListError }}</p>
                 <div class="divide-y divide-white/[0.06]">
-                  <article v-for="command in commands" :key="command.id" class="flex items-center gap-4 py-4 first:pt-3">
-                    <code class="w-36 shrink-0 truncate font-mono text-sm text-amber-200">{{ command.name }}</code>
-                    <p class="min-w-0 flex-1 truncate text-sm text-zinc-400">{{ command.actions.length === 1 ? `Send message: ${command.actions[0]?.payload || ''}` : `${command.actions.length} actions` }}</p>
+                  <article v-for="command in commands" :key="command.id" class="flex min-w-0 items-center gap-3 py-4 first:pt-3">
+                    <div class="min-w-0 flex-1"><div class="flex min-w-0 items-center gap-3"><code class="shrink-0 truncate font-mono text-sm" :class="command.enabled ? 'text-amber-200' : 'text-zinc-600 line-through'">{{ command.name }}</code><p class="min-w-0 truncate text-sm text-zinc-400">{{ command.actions.length === 1 ? `Send message: ${command.actions[0]?.payload || ''}` : `${command.actions.length} actions` }}</p></div><span class="mt-1 block truncate text-xs text-zinc-600 sm:hidden">{{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span></div>
                     <span class="hidden w-40 shrink-0 truncate text-xs text-zinc-600 sm:block">{{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span>
-                    <button type="button" class="shrink-0 text-xs text-zinc-600 transition hover:text-amber-200" @click="openEditCommand(command)">Edit</button>
-                    <button type="button" class="shrink-0 text-xs text-zinc-600 transition hover:text-rose-300" @click="deleteCommand(command.id)">Delete</button>
+                    <div class="flex shrink-0 items-center gap-3"><button type="button" role="switch" :aria-checked="command.enabled" class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-300/40" :class="command.enabled ? 'bg-emerald-400/80' : 'bg-zinc-700'" @click="toggleCommand(command)"><span class="block h-4 w-4 rounded-full bg-white shadow-sm transition-transform" :class="command.enabled ? 'translate-x-5' : 'translate-x-0'"></span></button><button type="button" class="text-xs text-zinc-600 transition hover:text-amber-200" @click="openEditCommand(command)">Edit</button><button type="button" class="text-xs text-zinc-600 transition hover:text-rose-300" @click="deleteCommand(command.id)">Delete</button></div>
                   </article>
                   <div v-if="!commands.length" class="py-12 text-center text-sm text-zinc-600">No custom commands yet.</div>
                 </div>
