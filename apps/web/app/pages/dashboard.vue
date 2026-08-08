@@ -76,6 +76,7 @@ const initialView: DashboardView = route.query.chat_id ? (route.query.view === '
 const activeView = ref<DashboardView>(initialView)
 const selectedChatID = ref<number | null>(route.query.chat_id ? Number(route.query.chat_id) : null)
 const commands = ref<CustomCommand[]>([])
+const groupDataLoading = ref(false)
 const commandName = ref('')
 const commandAliases = ref('')
 const commandPermission = ref<CustomCommand['permission']>('user')
@@ -116,6 +117,7 @@ async function selectChat(chatID: number | null) {
   activeView.value = chatID ? 'commands' : 'overview'
   commands.value = []
   commandListError.value = null
+  groupDataLoading.value = true
   const query: Record<string, string> = {}
   if (chatID) query.chat_id = String(chatID)
   await router.replace({ query })
@@ -222,16 +224,23 @@ async function refreshSelectedChat(chatID = selectedChatID.value) {
   const query = chatID ? `?chat_id=${chatID}` : ''
   const overviewURL = `${baseURL}/api/dashboard/overview${query}`
   const commandsURL = `${baseURL}/api/dashboard/commands${query}`
-  const nextDashboard = await $fetch<DashboardData>(overviewURL, { credentials: 'include' })
-  activityUpdatedAt.value = Date.now()
-  const commandData = await $fetch<{ commands: CustomCommand[] }>(commandsURL, { credentials: 'include' })
-  if (requestID !== selectedChatRequest || chatID !== selectedChatID.value) {
-    return
+  groupDataLoading.value = true
+  try {
+    const nextDashboard = await $fetch<DashboardData>(overviewURL, { credentials: 'include' })
+    activityUpdatedAt.value = Date.now()
+    const commandData = chatID
+      ? await $fetch<{ commands: CustomCommand[] }>(commandsURL, { credentials: 'include' })
+      : { commands: [] as CustomCommand[] }
+    if (requestID !== selectedChatRequest || chatID !== selectedChatID.value) {
+      return
+    }
+    dashboard.value = nextDashboard
+    commands.value = commandData.commands
+    commandListError.value = null
+    commandChatID.value = chatID || dashboard.value?.chats[0]?.chat_id || null
+  } finally {
+    if (requestID === selectedChatRequest) groupDataLoading.value = false
   }
-  dashboard.value = nextDashboard
-  commands.value = commandData.commands
-  commandListError.value = null
-  commandChatID.value = chatID || dashboard.value?.chats[0]?.chat_id || null
 }
 
 async function fetchAuthState() {
@@ -399,7 +408,21 @@ onUnmounted(() => {
 
 <template>
   <main class="min-h-screen bg-[#0b0d10] text-zinc-100">
-    <div v-if="loading" class="flex min-h-screen items-center justify-center text-sm text-zinc-500">Loading dashboard...</div>
+    <div v-if="loading" class="flex min-h-screen items-center justify-center bg-[#0b0d10] px-5 py-8 text-zinc-100 sm:px-8 lg:px-10 lg:py-10 xl:px-14">
+      <div class="w-full max-w-3xl">
+        <div class="flex items-center gap-3 text-sm text-zinc-400">
+          <span class="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300"></span>
+          Loading dashboard...
+        </div>
+        <div class="mt-10 animate-pulse space-y-6">
+          <div class="h-12 w-2/3 rounded-xl bg-white/[0.06]"></div>
+          <div class="grid gap-4 sm:grid-cols-3">
+            <div v-for="card in 3" :key="card" class="h-32 rounded-2xl bg-white/[0.04]"></div>
+          </div>
+          <div class="h-72 rounded-2xl bg-white/[0.04]"></div>
+        </div>
+      </div>
+    </div>
 
     <div v-else-if="error" class="flex min-h-screen items-center justify-center px-6">
       <div class="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-5 text-sm text-rose-200">{{ error }}</div>
@@ -423,12 +446,12 @@ onUnmounted(() => {
       <div class="min-h-screen lg:flex">
         <aside class="border-b border-white/[0.07] bg-[#0f1115] lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:border-b-0 lg:border-r">
           <div class="flex items-center justify-between px-5 py-4 lg:block lg:px-6 lg:py-7">
-            <div class="flex items-center gap-3">
+             <NuxtLink to="/" class="flex items-center gap-3 rounded-xl outline-none transition hover:opacity-80 focus-visible:ring-2 focus-visible:ring-amber-300/50">
               <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-300 text-zinc-950">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
               </div>
               <div><span class="font-semibold tracking-tight">Helio</span><span class="block text-xs text-zinc-600">workspace</span></div>
-             </div>
+             </NuxtLink>
            </div>
 
            <div v-if="selectedChatID" class="mx-5 mb-2 border-t border-white/[0.07] pt-5 lg:mx-6">
@@ -488,7 +511,19 @@ onUnmounted(() => {
                </button>
               </div>
 
-             <div v-if="activeView === 'overview'" class="space-y-6">
+             <div v-if="groupDataLoading || (activeView === 'activity' && refreshingActivity)" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
+               <div class="flex items-center gap-3 text-sm text-zinc-400">
+                 <span class="h-4 w-4 animate-spin rounded-full border-2 border-amber-300/30 border-t-amber-300"></span>
+                 Loading group data...
+               </div>
+               <div class="mt-6 space-y-3">
+                 <div class="h-4 w-1/3 animate-pulse rounded bg-white/[0.06]"></div>
+                 <div class="h-24 animate-pulse rounded-xl bg-white/[0.04]"></div>
+                 <div class="h-24 animate-pulse rounded-xl bg-white/[0.04]"></div>
+               </div>
+             </div>
+
+             <div v-else-if="activeView === 'overview'" class="space-y-6">
               <div class="grid gap-4 sm:grid-cols-3">
                 <div class="rounded-2xl border border-amber-300/20 bg-gradient-to-br from-amber-300/[0.12] to-transparent p-5"><p class="text-xs text-amber-200/70">Protected chats</p><p class="mt-5 text-4xl font-semibold">{{ dashboard?.protected_chats || 0 }}</p><p class="mt-2 text-xs text-zinc-500">All systems operational</p></div>
                 <div class="rounded-2xl border border-white/[0.07] bg-white/[0.035] p-5"><p class="text-xs text-zinc-500">Actions this week</p><p class="mt-5 text-4xl font-semibold">{{ dashboard?.actions_this_week || 0 }}</p><p class="mt-2 text-xs text-emerald-300">From the action log</p></div>
