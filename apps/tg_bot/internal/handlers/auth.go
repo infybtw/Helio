@@ -188,6 +188,39 @@ func (a *Auth) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
+// DashboardOverview returns moderation metrics for chats visible to the user.
+func (a *Auth) DashboardOverview(c *gin.Context) {
+	chatIDs, err := a.db.ListTrackedChatIDs(c.Request.Context())
+	if err != nil {
+		a.log.Error("failed to list dashboard chats", "error", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load dashboard data"})
+		return
+	}
+	session := SessionFromContext(c)
+	ownedChatIDs := make([]int64, 0, len(chatIDs))
+	for _, chatID := range chatIDs {
+		member, err := a.client.GetChatMember(c.Request.Context(), chatID, session.UserID)
+		if err == nil && member.Status == "creator" {
+			ownedChatIDs = append(ownedChatIDs, chatID)
+		}
+	}
+	data, err := a.db.DashboardData(c.Request.Context(), ownedChatIDs)
+	if err != nil {
+		a.log.Error("failed to load dashboard data", "error", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load dashboard data"})
+		return
+	}
+	for i := range data.Chats {
+		members, err := a.client.GetChatMemberCount(c.Request.Context(), data.Chats[i].ChatID)
+		if err != nil {
+			a.log.Warn("failed to get dashboard chat member count", "error", err, "chat_id", data.Chats[i].ChatID)
+			continue
+		}
+		data.Chats[i].Members = members
+	}
+	c.JSON(http.StatusOK, data)
+}
+
 // RequireAuth is a Gin middleware that ensures a valid session exists.
 func (a *Auth) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {

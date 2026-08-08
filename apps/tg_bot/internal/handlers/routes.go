@@ -17,12 +17,12 @@ func RegisterAuthRoutes(auth *Auth) httpserver.RouteFunc {
 		g.Router.GET("/api/auth/me", auth.Me)
 		g.Router.GET("/api/auth/config", auth.AuthConfigJSON)
 
-		// Example protected route that can be expanded for dashboard API.
 		protected := g.Router.Group("/api/dashboard")
 		protected.Use(auth.RequireAuth())
 		protected.GET("/profile", func(c *gin.Context) {
 			session := SessionFromContext(c)
 			c.JSON(http.StatusOK, session)
 		})
+		protected.GET("/overview", auth.DashboardOverview)
 	}
 }

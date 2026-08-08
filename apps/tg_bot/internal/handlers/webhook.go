@@ -73,6 +73,9 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 				w.log.Error("failed to track chat", "error", err, "chat_id", update.Message.Chat.ID)
 			}
 		}
+		if err := w.db.RecordMessage(ctx, messageRecord(update.Message)); err != nil {
+			w.log.Error("failed to record message", "error", err, "chat_id", update.Message.Chat.ID, "message_id", update.Message.MessageID)
+		}
 		w.log.Info("dispatching to message handler",
 			"update_id", update.UpdateID,
 			"message_id", update.Message.MessageID,
@@ -90,6 +93,9 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 				w.log.Error("failed to track chat", "error", err, "chat_id", update.EditedMessage.Chat.ID)
 			}
 		}
+		if err := w.db.RecordMessage(ctx, messageRecord(update.EditedMessage)); err != nil {
+			w.log.Error("failed to record edited message", "error", err, "chat_id", update.EditedMessage.Chat.ID, "message_id", update.EditedMessage.MessageID)
+		}
 		w.log.Info("dispatching to edited message handler",
 			"update_id", update.UpdateID,
 			"message_id", update.EditedMessage.MessageID,
@@ -101,6 +107,23 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 	case update.MyChatMember != nil:
 		w.trackBotChatMembership(ctx, update.MyChatMember)
 	}
+}
+
+func messageRecord(msg *telegram.Message) database.MessageRecord {
+	record := database.MessageRecord{
+		ChatID:       msg.Chat.ID,
+		MessageID:    msg.MessageID,
+		ChatType:     msg.Chat.Type,
+		ChatTitle:    msg.Chat.Title,
+		ChatUsername: msg.Chat.Username,
+		Text:         msg.Text,
+		SentAt:       int64(msg.Date),
+	}
+	if msg.From != nil {
+		record.SenderID = msg.From.ID
+		record.SenderUsername = msg.From.Username
+	}
+	return record
 }
 
 func (w *Webhook) trackBotChatMembership(ctx context.Context, update *telegram.ChatMemberUpdated) {

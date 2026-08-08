@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 useHead({
-  title: 'HelioBot — Login Successful',
+  title: 'Helio — Login Successful',
   meta: [
     { name: 'description', content: 'Telegram authentication successful. Redirecting to dashboard.' }
   ]

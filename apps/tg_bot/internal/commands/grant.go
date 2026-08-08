@@ -52,6 +52,9 @@ func Grant(ctx context.Context, client *telegram.Client, st database.Store, msg 
 		"username", target.Username,
 		"granted_by", msg.From.ID,
 	)
+	if err := recordAction(ctx, st, msg, "!grant", msg.ReplyToMessage); err != nil {
+		log.Error("failed to record grant action", "error", err, "chat_id", chatID)
+	}
 
 	if err := client.DeleteMessage(ctx, chatID, msg.MessageID); err != nil {
 		log.Error("failed to delete command message",
@@ -108,6 +111,9 @@ func Revoke(ctx context.Context, client *telegram.Client, st database.Store, msg
 		"revoked_by", msg.From.ID,
 		"had_rights", removed,
 	)
+	if err := recordAction(ctx, st, msg, "!revoke", msg.ReplyToMessage); err != nil {
+		log.Error("failed to record revoke action", "error", err, "chat_id", chatID)
+	}
 
 	if err := client.DeleteMessage(ctx, chatID, msg.MessageID); err != nil {
 		log.Error("failed to delete command message",
