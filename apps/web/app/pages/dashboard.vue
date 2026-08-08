@@ -47,6 +47,12 @@ interface DashboardData {
   chats: DashboardChat[]
   activity: DashboardActivity[]
 }
+interface ActivityPage {
+  items: DashboardActivity[]
+  total: number
+  page: number
+  per_page: number
+}
 
 const config = ref<AuthConfig | null>(null)
 const session = ref<UserSession | null>(null)
@@ -65,12 +71,17 @@ const commandName = ref('')
 const commandResponse = ref('')
 const commandChatID = ref<number | null>(null)
 const commandError = ref<string | null>(null)
+const commandListError = ref<string | null>(null)
 const savingCommand = ref(false)
 const commandModalOpen = ref(false)
+const editingCommandID = ref<number | null>(null)
 const refreshingActivity = ref(false)
 const activityUpdatedAt = ref<number | null>(null)
 const activityClock = ref(Date.now())
 const activityType = ref<'all' | DashboardActivity['event_type']>('all')
+const activityPage = ref(1)
+const activityItems = ref<DashboardActivity[]>([])
+const activityTotal = ref(0)
 let activityTimer: ReturnType<typeof setInterval> | undefined
 
 function navigateToView(view: DashboardView) {
@@ -108,16 +119,20 @@ function formatActivityDate(value: string) {
   return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString('ru-RU')
 }
 
-const activity = computed(() => dashboard.value?.activity
-  .filter((item) => activityType.value === 'all' || item.event_type === activityType.value)
-  .map((item) => ({
-  command: item.action,
-  type: item.event_type,
-  user: item.actor || 'Unknown user',
-  chat: item.chat,
-  time: formatActivityDate(item.created_at),
-  tone: item.action === '!mute' ? 'text-amber-300' : item.action === '!delete' ? 'text-rose-300' : item.action === '!grant' ? 'text-emerald-300' : 'text-violet-300'
-})) || [])
+function formatActivity(items: DashboardActivity[]) {
+  return items.map((item) => ({
+    command: item.action,
+    type: item.event_type,
+    user: item.actor || 'Unknown user',
+    chat: item.chat,
+    time: formatActivityDate(item.created_at),
+    tone: item.action === '!mute' ? 'text-amber-300' : item.action === '!delete' ? 'text-rose-300' : item.action === '!grant' ? 'text-emerald-300' : 'text-violet-300'
+  }))
+}
+
+const overviewActivity = computed(() => formatActivity(dashboard.value?.activity || []))
+const activity = computed(() => formatActivity(activityItems.value))
+const activityPageCount = computed(() => Math.max(1, Math.ceil(activityTotal.value / 50)))
 
 async function refreshDashboard() {
   try {
@@ -131,8 +146,29 @@ async function refreshDashboard() {
 async function refreshActivity() {
   if (refreshingActivity.value) return
   refreshingActivity.value = true
-  await refreshDashboard()
-  refreshingActivity.value = false
+  try {
+    const type = activityType.value === 'all' ? '' : `&type=${activityType.value}`
+    const data = await $fetch<ActivityPage>(`${baseURL}/api/dashboard/activity?page=${activityPage.value}${type}`, { credentials: 'include' })
+    activityItems.value = data.items
+    activityTotal.value = data.total
+    activityUpdatedAt.value = Date.now()
+  } catch {
+    error.value = 'Не удалось обновить активность. Попробуйте еще раз позже.'
+  } finally {
+    refreshingActivity.value = false
+  }
+}
+
+function setActivityType(type: 'all' | DashboardActivity['event_type']) {
+  activityType.value = type
+  activityPage.value = 1
+  refreshActivity()
+}
+
+function setActivityPage(page: number) {
+  if (page < 1 || page > activityPageCount.value || page === activityPage.value) return
+  activityPage.value = page
+  refreshActivity()
 }
 
 const activityAge = computed(() => {
@@ -158,6 +194,9 @@ async function fetchAuthState() {
       commandChatID.value = dashboard.value?.chats[0]?.chat_id || null
       const commandData = await $fetch<{ commands: CustomCommand[] }>(`${baseURL}/api/dashboard/commands`, { credentials: 'include' })
       commands.value = commandData.commands
+      if (activeView.value === 'activity') {
+        await refreshActivity()
+      }
     }
   } catch {
     error.value = 'Не удалось загрузить дашборд. Попробуйте еще раз позже.'
@@ -171,13 +210,19 @@ async function createCommand() {
   savingCommand.value = true
   commandError.value = null
   try {
-    const command = await $fetch<CustomCommand>(`${baseURL}/api/dashboard/commands`, {
-      method: 'POST', credentials: 'include',
+    const isEditing = editingCommandID.value !== null
+    const command = await $fetch<CustomCommand>(`${baseURL}/api/dashboard/commands${isEditing ? `/${editingCommandID.value}` : ''}`, {
+      method: isEditing ? 'PUT' : 'POST', credentials: 'include',
       body: { chat_id: commandChatID.value, name: commandName.value, response: commandResponse.value }
     })
-    commands.value.unshift(command)
+    if (isEditing) {
+      commands.value = commands.value.map((item) => item.id === command.id ? command : item)
+    } else {
+      commands.value.unshift(command)
+    }
     commandName.value = ''
     commandResponse.value = ''
+    editingCommandID.value = null
     commandModalOpen.value = false
   } catch {
     commandError.value = 'Не удалось сохранить команду. Проверьте имя и попробуйте снова.'
@@ -187,12 +232,30 @@ async function createCommand() {
 }
 
 async function deleteCommand(id: number) {
+  commandListError.value = null
   try {
     await $fetch(`${baseURL}/api/dashboard/commands/${id}`, { method: 'DELETE', credentials: 'include' })
     commands.value = commands.value.filter((command) => command.id !== id)
   } catch {
-    commandError.value = 'Не удалось удалить команду.'
+    commandListError.value = 'Не удалось удалить команду. Попробуйте еще раз.'
   }
+}
+
+function openCreateCommand() {
+  editingCommandID.value = null
+  commandName.value = ''
+  commandResponse.value = ''
+  commandError.value = null
+  commandModalOpen.value = true
+}
+
+function openEditCommand(command: CustomCommand) {
+  editingCommandID.value = command.id
+  commandChatID.value = command.chat_id
+  commandName.value = command.name.replace(/^!/, '')
+  commandResponse.value = command.response
+  commandError.value = null
+  commandModalOpen.value = true
 }
 
 async function logout() {
@@ -290,7 +353,7 @@ onUnmounted(() => {
                 <p v-else-if="activeView === 'activity'" class="mt-3 max-w-xl text-zinc-500">A complete log of moderation actions in your workspace.</p>
                 <p v-else class="mt-3 max-w-xl text-zinc-500">Команды, которые бот будет выполнять в твоих Telegram-группах.</p>
                </div>
-               <button v-if="activeView === 'commands'" type="button" class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200" @click="commandError = null; commandModalOpen = true">
+               <button v-if="activeView === 'commands'" type="button" class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200" @click="openCreateCommand">
                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>
                  Add command
                </button>
@@ -305,7 +368,7 @@ onUnmounted(() => {
 
               <div class="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
                  <section id="chats" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6"><div><h2 class="font-semibold">Your chats</h2><p class="mt-1 text-sm text-zinc-600">Connected Telegram groups</p></div><div class="mt-6 divide-y divide-white/[0.06]"><div v-for="chat in chats" :key="chat.name" class="flex items-center justify-between gap-4 py-4 first:pt-0"><div class="flex min-w-0 items-center gap-3"><div :class="chat.color" class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xs font-bold text-zinc-950">{{ chat.initials }}</div><div class="min-w-0"><p class="truncate text-sm font-medium">{{ chat.name }}</p><p class="truncate text-xs text-zinc-600">{{ chat.handle }} · {{ chat.members }} participants</p></div></div><div class="hidden text-right sm:block"><p class="font-mono text-sm text-zinc-300">{{ chat.commands }}</p><p class="text-[10px] uppercase tracking-wider text-zinc-600">actions / 7d</p></div><span class="h-2 w-2 shrink-0 rounded-full" :class="chat.status === 'Healthy' ? 'bg-emerald-400' : 'bg-amber-300'"></span></div></div></section>
-                 <section id="activity" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6"><div class="flex items-center justify-between"><div><h2 class="font-semibold">Recent activity</h2><p class="mt-1 text-sm text-zinc-600">Moderation across your workspace</p></div><span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_theme(colors.emerald.400)]"></span></div><div class="mt-6 space-y-5"><div v-for="item in activity" :key="item.command + item.time" class="flex gap-3"><div class="mt-1 h-7 w-7 shrink-0 rounded-lg bg-white/[0.06] text-center text-[10px] leading-7 text-zinc-500">↗</div><div class="min-w-0"><p class="text-sm"><code :class="item.tone" class="font-mono text-xs">{{ item.command }}</code> <span class="text-zinc-500">by {{ item.user }}</span></p><p class="mt-1 truncate text-xs text-zinc-600">{{ item.chat }} · {{ item.time }}</p></div></div></div><button type="button" class="mt-6 w-full border-t border-white/[0.06] pt-4 text-left text-xs text-zinc-500 hover:text-zinc-200" @click="navigateToView('activity')">View all activity →</button></section>
+                 <section id="activity" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6"><div class="flex items-center justify-between"><div><h2 class="font-semibold">Recent activity</h2><p class="mt-1 text-sm text-zinc-600">Moderation across your workspace</p></div><span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_theme(colors.emerald.400)]"></span></div><div class="mt-6 space-y-5"><div v-for="item in overviewActivity" :key="item.command + item.time" class="flex gap-3"><div class="mt-1 h-7 w-7 shrink-0 rounded-lg bg-white/[0.06] text-center text-[10px] leading-7 text-zinc-500">↗</div><div class="min-w-0"><p class="text-sm"><code :class="item.tone" class="font-mono text-xs">{{ item.command }}</code> <span class="text-zinc-500">by {{ item.user }}</span></p><p class="mt-1 truncate text-xs text-zinc-600">{{ item.chat }} · {{ item.time }}</p></div></div><p v-if="!overviewActivity.length" class="py-6 text-sm text-zinc-600">No recent activity yet.</p></div><button type="button" class="mt-6 w-full border-t border-white/[0.06] pt-4 text-left text-xs text-zinc-500 hover:text-zinc-200" @click="navigateToView('activity')">View all activity →</button></section>
               </div>
             </div>
 
@@ -331,7 +394,7 @@ onUnmounted(() => {
                  <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-500 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" :disabled="refreshingActivity" @click="refreshActivity"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-4 w-4" :class="refreshingActivity ? 'animate-spin' : ''"><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4" /></svg>Refresh</button>
                </div>
                <div class="mb-4 flex gap-2 overflow-x-auto">
-                 <button v-for="type in ['all', 'custom', 'moderation', 'info'] as const" :key="type" type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition" :class="activityType === type ? 'bg-amber-300/15 text-amber-200' : 'bg-white/[0.04] text-zinc-500 hover:text-zinc-200'" @click="activityType = type">{{ type }}</button>
+                  <button v-for="type in ['all', 'custom', 'moderation', 'info'] as const" :key="type" type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition" :class="activityType === type ? 'bg-amber-300/15 text-amber-200' : 'bg-white/[0.04] text-zinc-500 hover:text-zinc-200'" @click="setActivityType(type)">{{ type }}</button>
                </div>
                <div class="divide-y divide-white/[0.06]">
                 <div v-for="item in activity" :key="item.command + item.time" class="flex items-center gap-4 py-5 first:pt-0">
@@ -340,19 +403,25 @@ onUnmounted(() => {
                   <time class="shrink-0 text-xs text-zinc-600">{{ item.time }}</time>
                 </div>
                 <div v-if="!activity.length" class="py-8 text-sm text-zinc-600">No events for this type.</div>
+                </div>
+               <div v-if="activityTotal > 0" class="mt-5 flex items-center justify-between border-t border-white/[0.06] pt-4 text-xs text-zinc-600">
+                 <span>Page {{ activityPage }} of {{ activityPageCount }} · {{ activityTotal }} events</span>
+                 <div class="flex gap-2"><button type="button" class="rounded-lg px-3 py-2 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40" :disabled="activityPage === 1 || refreshingActivity" @click="setActivityPage(activityPage - 1)">Previous</button><button type="button" class="rounded-lg px-3 py-2 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40" :disabled="activityPage === activityPageCount || refreshingActivity" @click="setActivityPage(activityPage + 1)">Next</button></div>
                </div>
-             </div>
+              </div>
 
               <div v-else class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
                 <div class="mb-2 flex items-center justify-between gap-4 text-xs text-zinc-600">
                   <span>{{ commands.length }} command{{ commands.length === 1 ? '' : 's' }}</span>
                   <span>Available to chat members</span>
                 </div>
+                <p v-if="commandListError" class="mb-3 text-xs text-rose-300">{{ commandListError }}</p>
                 <div class="divide-y divide-white/[0.06]">
                   <article v-for="command in commands" :key="command.id" class="flex items-center gap-4 py-4 first:pt-3">
                     <code class="w-36 shrink-0 truncate font-mono text-sm text-amber-200">{{ command.name }}</code>
                     <p class="min-w-0 flex-1 truncate text-sm text-zinc-400">{{ command.response }}</p>
                     <span class="hidden w-40 shrink-0 truncate text-xs text-zinc-600 sm:block">{{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span>
+                    <button type="button" class="shrink-0 text-xs text-zinc-600 transition hover:text-amber-200" @click="openEditCommand(command)">Edit</button>
                     <button type="button" class="shrink-0 text-xs text-zinc-600 transition hover:text-rose-300" @click="deleteCommand(command.id)">Delete</button>
                   </article>
                   <div v-if="!commands.length" class="py-12 text-center text-sm text-zinc-600">No custom commands yet.</div>
@@ -366,14 +435,14 @@ onUnmounted(() => {
     <div v-if="commandModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-5 py-8 backdrop-blur-sm" @click.self="commandModalOpen = false">
       <form class="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-[#15181d] p-6 shadow-2xl" @submit.prevent="createCommand">
         <div class="flex items-start justify-between gap-4">
-          <div><h2 class="text-lg font-semibold">Add command</h2><p class="mt-1 text-sm text-zinc-500">Ответ будет доступен всем участникам чата.</p></div>
+          <div><h2 class="text-lg font-semibold">{{ editingCommandID ? 'Edit command' : 'Add command' }}</h2><p class="mt-1 text-sm text-zinc-500">Ответ будет доступен всем участникам чата.</p></div>
           <button type="button" class="text-zinc-600 hover:text-zinc-200" aria-label="Close" @click="commandModalOpen = false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
         </div>
         <label class="mt-6 block text-xs text-zinc-500">Chat<select v-model="commandChatID" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-amber-300/50"><option v-for="chat in chats" :key="chat.chat_id" :value="chat.chat_id">{{ chat.name }}</option></select></label>
-        <label class="mt-4 block text-xs text-zinc-500">Command<input v-model="commandName" maxlength="32" placeholder="welcome" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-amber-300/50"></label>
+        <label class="mt-4 block text-xs text-zinc-500">Command<div class="mt-2 flex overflow-hidden rounded-xl border border-white/[0.1] bg-[#111418] focus-within:border-amber-300/50"><span class="border-r border-white/[0.08] px-3 py-3 font-mono text-sm text-amber-200">!</span><input v-model="commandName" maxlength="32" placeholder="welcome" class="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></div></label>
         <label class="mt-4 block text-xs text-zinc-500">Response<textarea v-model="commandResponse" maxlength="4096" rows="5" placeholder="Welcome to the group!" class="mt-2 w-full resize-none rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-amber-300/50"></textarea></label>
         <p v-if="commandError" class="mt-3 text-xs text-rose-300">{{ commandError }}</p>
-        <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-xl px-4 py-2.5 text-sm text-zinc-500 hover:text-zinc-200" @click="commandModalOpen = false">Cancel</button><button :disabled="savingCommand || !commandChatID" type="submit" class="rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">{{ savingCommand ? 'Saving...' : 'Save command' }}</button></div>
+        <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-xl px-4 py-2.5 text-sm text-zinc-500 hover:text-zinc-200" @click="commandModalOpen = false">Cancel</button><button :disabled="savingCommand || !commandChatID" type="submit" class="rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">{{ savingCommand ? 'Saving...' : editingCommandID ? 'Save changes' : 'Save command' }}</button></div>
       </form>
     </div>
   </main>

@@ -58,6 +58,11 @@ type DashboardData struct {
 	Activity        []DashboardActivity `json:"activity"`
 }
 
+type ActivityPage struct {
+	Items []DashboardActivity `json:"items"`
+	Total int64               `json:"total"`
+}
+
 type CustomCommand struct {
 	ID        int64  `json:"id"`
 	ChatID    int64  `json:"chat_id"`
@@ -85,9 +90,11 @@ type Store interface {
 	RevokeChatAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 	// DashboardData returns moderation metrics for the supplied chats.
 	DashboardData(ctx context.Context, chatIDs []int64) (DashboardData, error)
+	ListActivity(ctx context.Context, chatIDs []int64, eventType string, limit, offset int) (ActivityPage, error)
 	ListCustomCommands(ctx context.Context, chatIDs []int64) ([]CustomCommand, error)
 	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, response string) (CustomCommand, error)
-	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (bool, error)
+	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, response string) (CustomCommand, bool, error)
+	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (CustomCommand, bool, error)
 	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
 	// Close releases database resources.
 	Close()

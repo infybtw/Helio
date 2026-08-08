@@ -24,8 +24,10 @@ func RegisterAuthRoutes(auth *Auth) httpserver.RouteFunc {
 			c.JSON(http.StatusOK, session)
 		})
 		protected.GET("/overview", auth.DashboardOverview)
+		protected.GET("/activity", auth.ListActivity)
 		protected.GET("/commands", auth.ListCommands)
 		protected.POST("/commands", auth.CreateCommand)
+		protected.PUT("/commands/:id", auth.UpdateCommand)
 		protected.DELETE("/commands/:id", auth.DeleteCommand)
 	}
 }

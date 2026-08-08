@@ -214,6 +214,30 @@ func (a *Auth) DashboardOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
+func (a *Auth) ListActivity(c *gin.Context) {
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "page must be a positive integer"})
+		return
+	}
+	eventType := c.Query("type")
+	if eventType != "" && eventType != "custom" && eventType != "moderation" && eventType != "info" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid activity type"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load activity"})
+		return
+	}
+	activity, err := a.db.ListActivity(c.Request.Context(), chatIDs, eventType, 50, (page-1)*50)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load activity"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": activity.Items, "total": activity.Total, "page": page, "per_page": 50})
+}
+
 func (a *Auth) ownedChatIDs(c *gin.Context) ([]int64, error) {
 	chatIDs, err := a.db.ListTrackedChatIDs(c.Request.Context())
 	if err != nil {
@@ -281,7 +305,51 @@ func (a *Auth) CreateCommand(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to create command"})
 		return
 	}
+	a.recordCommandActivity(c, command, "created")
 	c.JSON(http.StatusCreated, command)
+}
+
+func (a *Auth) UpdateCommand(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command id"})
+		return
+	}
+	var request createCommandRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
+	request.Response = strings.TrimSpace(request.Response)
+	if request.ChatID == 0 || request.Name == "" || request.Response == "" || len(request.Name) > 32 || len(request.Response) > 4096 || strings.ContainsAny(request.Name, " !\t\r\n") {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and response are required; name must be one word"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	if !containsChatID(chatIDs, request.ChatID) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
+		return
+	}
+	command, updated, err := a.db.UpdateCustomCommand(c.Request.Context(), id, request.ChatID, chatIDs, "!"+request.Name, request.Response)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to update command"})
+		return
+	}
+	if !updated {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
+		return
+	}
+	a.recordCommandActivity(c, command, "updated")
+	c.JSON(http.StatusOK, command)
 }
 
 func (a *Auth) DeleteCommand(c *gin.Context) {
@@ -295,7 +363,7 @@ func (a *Auth) DeleteCommand(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
 		return
 	}
-	deleted, err := a.db.DeleteCustomCommand(c.Request.Context(), id, chatIDs)
+	command, deleted, err := a.db.DeleteCustomCommand(c.Request.Context(), id, chatIDs)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to delete command"})
 		return
@@ -304,7 +372,21 @@ func (a *Auth) DeleteCommand(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
 		return
 	}
+	a.recordCommandActivity(c, command, "deleted")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *Auth) recordCommandActivity(c *gin.Context, command database.CustomCommand, event string) {
+	session := SessionFromContext(c)
+	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{
+		ChatID:         command.ChatID,
+		ActorID:        session.UserID,
+		ActorFirstName: session.FirstName,
+		Action:         "custom command " + event + ": " + command.Name,
+		EventType:      "info",
+	}); err != nil {
+		a.log.Warn("failed to record custom command management activity", "error", err, "command_id", command.ID, "event", event)
+	}
 }
 
 func containsChatID(chatIDs []int64, wanted int64) bool {

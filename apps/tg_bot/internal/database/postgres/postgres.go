@@ -208,30 +208,48 @@ func (p *Postgres) DashboardData(ctx context.Context, chatIDs []int64) (database
 		return data, fmt.Errorf("iterate dashboard chats: %w", err)
 	}
 
-	activityRows, err := p.pool.Query(ctx, `
+	activity, err := p.ListActivity(ctx, chatIDs, "", 5, 0)
+	if err != nil {
+		return data, err
+	}
+	data.Activity = activity.Items
+	return data, nil
+}
+
+func (p *Postgres) ListActivity(ctx context.Context, chatIDs []int64, eventType string, limit, offset int) (database.ActivityPage, error) {
+	page := database.ActivityPage{Items: []database.DashboardActivity{}}
+	if len(chatIDs) == 0 {
+		return page, nil
+	}
+	if err := p.pool.QueryRow(ctx, `
+		SELECT count(*) FROM action_logs
+		WHERE chat_id = ANY($1) AND ($2 = '' OR event_type = $2)`, chatIDs, eventType).Scan(&page.Total); err != nil {
+		return page, fmt.Errorf("count activity: %w", err)
+	}
+	rows, err := p.pool.Query(ctx, `
 		SELECT a.action, a.event_type, COALESCE(NULLIF(a.actor_first_name, ''), 'Unknown user'), COALESCE(NULLIF(t.title, ''), t.username, 'Unknown chat'),
 		       a.target_message_id, a.created_at
 		FROM action_logs a
 		JOIN tracked_chats t ON t.chat_id = a.chat_id
-		WHERE a.chat_id = ANY($1)
-		ORDER BY a.created_at DESC LIMIT 20`, chatIDs)
+		WHERE a.chat_id = ANY($1) AND ($2 = '' OR a.event_type = $2)
+		ORDER BY a.created_at DESC LIMIT $3 OFFSET $4`, chatIDs, eventType, limit, offset)
 	if err != nil {
-		return data, fmt.Errorf("list dashboard activity: %w", err)
+		return page, fmt.Errorf("list activity: %w", err)
 	}
-	defer activityRows.Close()
-	for activityRows.Next() {
+	defer rows.Close()
+	for rows.Next() {
 		var item database.DashboardActivity
 		var createdAt time.Time
-		if err := activityRows.Scan(&item.Action, &item.EventType, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
-			return data, fmt.Errorf("scan dashboard activity: %w", err)
+		if err := rows.Scan(&item.Action, &item.EventType, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
+			return page, fmt.Errorf("scan activity: %w", err)
 		}
 		item.CreatedAt = createdAt.Format(time.RFC3339)
-		data.Activity = append(data.Activity, item)
+		page.Items = append(page.Items, item)
 	}
-	if err := activityRows.Err(); err != nil {
-		return data, fmt.Errorf("iterate dashboard activity: %w", err)
+	if err := rows.Err(); err != nil {
+		return page, fmt.Errorf("iterate activity: %w", err)
 	}
-	return data, nil
+	return page, nil
 }
 
 func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]database.CustomCommand, error) {
@@ -276,15 +294,45 @@ func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy in
 	return command, nil
 }
 
-func (p *Postgres) DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (bool, error) {
+func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, response string) (database.CustomCommand, bool, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
 	if len(chatIDs) == 0 {
-		return false, nil
+		return command, false, nil
 	}
-	tag, err := p.pool.Exec(ctx, `DELETE FROM custom_commands WHERE id = $1 AND chat_id = ANY($2)`, id, chatIDs)
+	err := p.pool.QueryRow(ctx, `
+		UPDATE custom_commands SET chat_id = $2, name = $3, response = $4
+		WHERE id = $1 AND chat_id = ANY($5)
+		RETURNING id, chat_id, name, response, created_at`, id, chatID, name, response, chatIDs).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Response, &createdAt)
+	if err == pgx.ErrNoRows {
+		return command, false, nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("delete custom command: %w", err)
+		return command, false, fmt.Errorf("update custom command: %w", err)
 	}
-	return tag.RowsAffected() > 0, nil
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	return command, true, nil
+}
+
+func (p *Postgres) DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (database.CustomCommand, bool, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	if len(chatIDs) == 0 {
+		return command, false, nil
+	}
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM custom_commands WHERE id = $1 AND chat_id = ANY($2)
+		RETURNING id, chat_id, name, response, created_at`, id, chatIDs).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Response, &createdAt)
+	if err == pgx.ErrNoRows {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, fmt.Errorf("delete custom command: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	return command, true, nil
 }
 
 func (p *Postgres) FindCustomCommand(ctx context.Context, chatID int64, name string) (database.CustomCommand, bool, error) {
