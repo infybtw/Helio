@@ -1,4 +1,4 @@
-# HelioBot
+# Helio
 
 Telegram group moderation bot written in Go. Receives updates via a webhook and provides owner-only moderation commands.
 

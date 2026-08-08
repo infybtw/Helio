@@ -1,8 +1,8 @@
 <script setup lang="ts">
 useHead({
-  title: 'HelioBot — Telegram Group Moderation',
+  title: 'Helio — Telegram Group Moderation',
   meta: [
-    { name: 'description', content: 'HelioBot is a lightweight Telegram group moderation bot. Delete, mute and ban with simple reply commands.' }
+    { name: 'description', content: 'Helio is a lightweight Telegram group moderation bot. Delete, mute and ban with simple reply commands.' }
   ]
 })
 
@@ -44,7 +44,7 @@ const ownerCommands = [
               <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
             </svg>
           </div>
-          <span class="text-lg font-semibold tracking-tight">HelioBot</span>
+          <span class="text-lg font-semibold tracking-tight">Helio</span>
         </div>
         <NuxtLink
           to="/dashboard"
@@ -65,7 +65,7 @@ const ownerCommands = [
         <span class="bg-gradient-to-r from-amber-300 to-orange-400 bg-clip-text text-transparent">made simple</span>
       </h1>
       <p class="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-zinc-400">
-        HelioBot keeps your group clean with simple reply commands. Delete spam, mute troublemakers, and ban bad actors — no dashboards, no bloat, just chat commands.
+         Helio keeps your group clean with simple reply commands. Delete spam, mute troublemakers, and ban bad actors — no dashboards, no bloat, just chat commands.
       </p>
       <div class="mt-10 flex items-center justify-center gap-4">
         <a
@@ -118,7 +118,7 @@ const ownerCommands = [
 
     <footer class="border-t border-zinc-800/80">
       <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-8 text-sm text-zinc-500">
-        <span>HelioBot — Telegram group moderation</span>
+         <span>Helio — Telegram group moderation</span>
         <a
           href="https://github.com/infybtw/Helio"
           target="_blank"
