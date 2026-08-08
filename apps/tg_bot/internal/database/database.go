@@ -64,11 +64,16 @@ type ActivityPage struct {
 }
 
 type CustomCommand struct {
-	ID        int64  `json:"id"`
-	ChatID    int64  `json:"chat_id"`
-	Name      string `json:"name"`
-	Response  string `json:"response"`
-	CreatedAt string `json:"created_at"`
+	ID        int64                 `json:"id"`
+	ChatID    int64                 `json:"chat_id"`
+	Name      string                `json:"name"`
+	Actions   []CustomCommandAction `json:"actions"`
+	CreatedAt string                `json:"created_at"`
+}
+
+type CustomCommandAction struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
 }
 
 // Store is the abstract database interface. Implementations hide all SQL.
@@ -92,8 +97,8 @@ type Store interface {
 	DashboardData(ctx context.Context, chatIDs []int64) (DashboardData, error)
 	ListActivity(ctx context.Context, chatIDs []int64, eventType string, limit, offset int) (ActivityPage, error)
 	ListCustomCommands(ctx context.Context, chatIDs []int64) ([]CustomCommand, error)
-	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, response string) (CustomCommand, error)
-	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, response string) (CustomCommand, bool, error)
+	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name string, actions []CustomCommandAction) (CustomCommand, error)
+	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name string, actions []CustomCommandAction) (CustomCommand, bool, error)
 	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (CustomCommand, bool, error)
 	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
 	// Close releases database resources.

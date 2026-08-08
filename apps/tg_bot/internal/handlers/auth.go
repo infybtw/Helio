@@ -269,9 +269,9 @@ func (a *Auth) ListCommands(c *gin.Context) {
 }
 
 type createCommandRequest struct {
-	ChatID   int64  `json:"chat_id"`
-	Name     string `json:"name"`
-	Response string `json:"response"`
+	ChatID  int64                          `json:"chat_id"`
+	Name    string                         `json:"name"`
+	Actions []database.CustomCommandAction `json:"actions"`
 }
 
 func (a *Auth) CreateCommand(c *gin.Context) {
@@ -281,9 +281,8 @@ func (a *Auth) CreateCommand(c *gin.Context) {
 		return
 	}
 	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
-	request.Response = strings.TrimSpace(request.Response)
-	if request.ChatID == 0 || request.Name == "" || request.Response == "" || len(request.Name) > 32 || len(request.Response) > 4096 || strings.ContainsAny(request.Name, " !\t\r\n") {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and response are required; name must be one word"})
+	if !validCommandRequest(request) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
 		return
 	}
 	ownedChatIDs, err := a.ownedChatIDs(c)
@@ -296,7 +295,7 @@ func (a *Auth) CreateCommand(c *gin.Context) {
 		return
 	}
 	session := SessionFromContext(c)
-	command, err := a.db.CreateCustomCommand(c.Request.Context(), request.ChatID, session.UserID, "!"+request.Name, request.Response)
+	command, err := a.db.CreateCustomCommand(c.Request.Context(), request.ChatID, session.UserID, "!"+request.Name, request.Actions)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
@@ -321,9 +320,8 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 		return
 	}
 	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
-	request.Response = strings.TrimSpace(request.Response)
-	if request.ChatID == 0 || request.Name == "" || request.Response == "" || len(request.Name) > 32 || len(request.Response) > 4096 || strings.ContainsAny(request.Name, " !\t\r\n") {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and response are required; name must be one word"})
+	if !validCommandRequest(request) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
 		return
 	}
 	chatIDs, err := a.ownedChatIDs(c)
@@ -335,7 +333,7 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
 		return
 	}
-	command, updated, err := a.db.UpdateCustomCommand(c.Request.Context(), id, request.ChatID, chatIDs, "!"+request.Name, request.Response)
+	command, updated, err := a.db.UpdateCustomCommand(c.Request.Context(), id, request.ChatID, chatIDs, "!"+request.Name, request.Actions)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
@@ -350,6 +348,19 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 	}
 	a.recordCommandActivity(c, command, "updated")
 	c.JSON(http.StatusOK, command)
+}
+
+func validCommandRequest(request createCommandRequest) bool {
+	if request.ChatID == 0 || request.Name == "" || len(request.Name) > 32 || len(request.Actions) == 0 || strings.ContainsAny(request.Name, " !\t\r\n") {
+		return false
+	}
+	for i := range request.Actions {
+		request.Actions[i].Payload = strings.TrimSpace(request.Actions[i].Payload)
+		if request.Actions[i].Type != "send_message" || request.Actions[i].Payload == "" || len(request.Actions[i].Payload) > 4096 {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Auth) DeleteCommand(c *gin.Context) {

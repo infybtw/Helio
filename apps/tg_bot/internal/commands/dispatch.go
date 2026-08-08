@@ -97,8 +97,10 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 			log.Info("custom command activity recorded", "chat_id", msg.Chat.ID, "command", custom.Name, "user_id", action.ActorID)
 		}
 
-		if err := client.SendMessage(ctx, msg.Chat.ID, custom.Response, msg.MessageID); err != nil {
-			log.Warn("failed to send custom command response", "error", err, "chat_id", msg.Chat.ID, "command", command)
+		for _, action := range custom.Actions {
+			if err := client.SendMessage(ctx, msg.Chat.ID, action.Payload, msg.MessageID); err != nil {
+				log.Warn("failed to execute custom command action", "error", err, "chat_id", msg.Chat.ID, "command", command, "action_type", action.Type)
+			}
 		}
 	}
 }
