@@ -66,13 +66,15 @@ const session = ref<UserSession | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
 const dashboard = ref<DashboardData | null>(null)
+const availableChats = ref<DashboardChat[]>([])
 const apiBase = useRuntimeConfig().public.apiBaseUrl as string | undefined
 const baseURL = apiBase || ''
 type DashboardView = 'overview' | 'chats' | 'activity' | 'commands'
 const route = useRoute()
 const router = useRouter()
-const initialView: DashboardView = route.query.view === 'chats' || route.query.view === 'activity' || route.query.view === 'commands' ? route.query.view : 'overview'
+const initialView: DashboardView = route.query.chat_id ? (route.query.view === 'activity' ? 'activity' : 'commands') : 'overview'
 const activeView = ref<DashboardView>(initialView)
+const selectedChatID = ref<number | null>(route.query.chat_id ? Number(route.query.chat_id) : null)
 const commands = ref<CustomCommand[]>([])
 const commandName = ref('')
 const commandAliases = ref('')
@@ -96,20 +98,49 @@ const activityPage = ref(1)
 const activityItems = ref<DashboardActivity[]>([])
 const activityTotal = ref(0)
 let activityTimer: ReturnType<typeof setInterval> | undefined
+let selectedChatRequest = 0
 
 function navigateToView(view: DashboardView) {
   activeView.value = view
-  router.replace({ query: view === 'overview' ? {} : { view } })
+  const query: Record<string, string> = {}
+  if (selectedChatID.value) query.chat_id = String(selectedChatID.value)
+  if (view !== 'overview') query.view = view
+  router.replace({ query })
   if (view === 'activity' && session.value) {
     refreshActivity()
   }
 }
 
+async function selectChat(chatID: number | null) {
+  selectedChatID.value = chatID
+  activeView.value = chatID ? 'commands' : 'overview'
+  commands.value = []
+  commandListError.value = null
+  const query: Record<string, string> = {}
+  if (chatID) query.chat_id = String(chatID)
+  await router.replace({ query })
+  if (session.value) await refreshSelectedChat(chatID)
+}
+
 watch(() => route.query.view, (view) => {
-  const nextView = view === 'chats' || view === 'activity' || view === 'commands' ? view : 'overview'
+  const nextView = route.query.chat_id ? (view === 'activity' ? 'activity' : 'commands') : 'overview'
   activeView.value = nextView
   if (nextView === 'activity' && session.value) {
     refreshActivity()
+  }
+})
+
+watch(() => route.query.chat_id, (chatID) => {
+  const nextChatID = chatID ? Number(chatID) : null
+  if (selectedChatID.value === nextChatID) return
+  selectedChatID.value = nextChatID
+  commands.value = []
+  commandListError.value = null
+  if (session.value) {
+    refreshSelectedChat().catch(() => {
+      console.error('[dashboard] failed to load selected chat', { chatID: nextChatID })
+      commandListError.value = 'Не удалось загрузить команды этой группы.'
+    })
   }
 })
 
@@ -120,12 +151,13 @@ const displayName = computed(() => {
 
 const loginUrl = computed(() => config.value?.authorize_url ? `${baseURL}${config.value.authorize_url}` : '#')
 
-const chats = computed(() => dashboard.value?.chats.map((chat, index) => ({
+const chats = computed(() => (availableChats.value.length ? availableChats.value : dashboard.value?.chats || []).map((chat, index) => ({
   ...chat,
   members: chat.members.toLocaleString('ru-RU'),
   commands: chat.actions.toLocaleString('ru-RU'),
   color: ['bg-orange-400', 'bg-sky-400', 'bg-emerald-400'][index % 3]
 })) || [])
+const selectedChat = computed(() => chats.value.find((chat) => chat.chat_id === selectedChatID.value))
 
 function formatActivityDate(value: string) {
   const date = new Date(value)
@@ -147,21 +179,13 @@ const overviewActivity = computed(() => formatActivity(dashboard.value?.activity
 const activity = computed(() => formatActivity(activityItems.value))
 const activityPageCount = computed(() => Math.max(1, Math.ceil(activityTotal.value / 50)))
 
-async function refreshDashboard() {
-  try {
-    dashboard.value = await $fetch<DashboardData>(`${baseURL}/api/dashboard/overview`, { credentials: 'include' })
-    activityUpdatedAt.value = Date.now()
-  } catch {
-    error.value = 'Не удалось обновить активность. Попробуйте еще раз позже.'
-  }
-}
-
 async function refreshActivity() {
   if (refreshingActivity.value) return
   refreshingActivity.value = true
   try {
     const type = activityType.value === 'all' ? '' : `&type=${activityType.value}`
-    const data = await $fetch<ActivityPage>(`${baseURL}/api/dashboard/activity?page=${activityPage.value}${type}`, { credentials: 'include' })
+    const separator = selectedChatID.value ? `&chat_id=${selectedChatID.value}` : ''
+    const data = await $fetch<ActivityPage>(`${baseURL}/api/dashboard/activity?page=${activityPage.value}${type}${separator}`, { credentials: 'include' })
     activityItems.value = data.items
     activityTotal.value = data.total
     activityUpdatedAt.value = Date.now()
@@ -194,6 +218,30 @@ const activityAge = computed(() => {
   return `${Math.floor(minutes / 60)} ч. назад`
 })
 
+async function refreshSelectedChat(chatID = selectedChatID.value) {
+  const requestID = ++selectedChatRequest
+  const query = chatID ? `?chat_id=${chatID}` : ''
+  const overviewURL = `${baseURL}/api/dashboard/overview${query}`
+  const commandsURL = `${baseURL}/api/dashboard/commands${query}`
+  console.log('[dashboard] loading selected chat', { chatID, requestID })
+  console.log('[dashboard] overview request', overviewURL)
+  const nextDashboard = await $fetch<DashboardData>(overviewURL, { credentials: 'include' })
+  activityUpdatedAt.value = Date.now()
+  console.log('[dashboard] overview response', { chatID, chats: nextDashboard.chats })
+  console.log('[dashboard] commands request', commandsURL)
+  const commandData = await $fetch<{ commands: CustomCommand[] }>(commandsURL, { credentials: 'include' })
+  console.log('[dashboard] commands response', { chatID, count: commandData.commands.length, commands: commandData.commands })
+  if (requestID !== selectedChatRequest || chatID !== selectedChatID.value) {
+    console.log('[dashboard] ignored stale commands response', { chatID, requestID, selectedChatID: selectedChatID.value })
+    return
+  }
+  dashboard.value = nextDashboard
+  commands.value = commandData.commands
+  console.log('[dashboard] commands applied', { chatID, count: commands.value.length })
+  commandListError.value = null
+  commandChatID.value = chatID || dashboard.value?.chats[0]?.chat_id || null
+}
+
 async function fetchAuthState() {
   try {
     const [configRes, meRes] = await Promise.all([
@@ -203,10 +251,16 @@ async function fetchAuthState() {
     config.value = configRes
     session.value = meRes
     if (meRes) {
-      await refreshDashboard()
-      commandChatID.value = dashboard.value?.chats[0]?.chat_id || null
-      const commandData = await $fetch<{ commands: CustomCommand[] }>(`${baseURL}/api/dashboard/commands`, { credentials: 'include' })
-      commands.value = commandData.commands
+      const allDashboard = await $fetch<DashboardData>(`${baseURL}/api/dashboard/overview`, { credentials: 'include' })
+      availableChats.value = allDashboard.chats
+      if (selectedChatID.value && !availableChats.value.some((chat) => chat.chat_id === selectedChatID.value)) selectedChatID.value = null
+      dashboard.value = allDashboard
+      if (selectedChatID.value) {
+        await refreshSelectedChat(selectedChatID.value)
+      } else {
+        commands.value = []
+        commandChatID.value = null
+      }
       if (activeView.value === 'activity') {
         await refreshActivity()
       }
@@ -233,7 +287,7 @@ async function createCommand() {
     const isEditing = editingCommandID.value !== null
     const command = await $fetch<CustomCommand>(`${baseURL}/api/dashboard/commands${isEditing ? `/${editingCommandID.value}` : ''}`, {
       method: isEditing ? 'PUT' : 'POST', credentials: 'include',
-      body: { chat_id: commandChatID.value, name: commandName.value, permission: commandPermission.value, aliases: commandAliases.value.split(',').map((alias) => alias.trim()).filter(Boolean), actions: commandActions.value }
+       body: { chat_id: selectedChatID.value || commandChatID.value, name: commandName.value, permission: commandPermission.value, aliases: commandAliases.value.split(',').map((alias) => alias.trim()).filter(Boolean), actions: commandActions.value }
     })
     if (isEditing) {
       commands.value = commands.value.map((item) => item.id === command.id ? command : item)
@@ -382,27 +436,36 @@ onUnmounted(() => {
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
               </div>
               <div><span class="font-semibold tracking-tight">Helio</span><span class="block text-xs text-zinc-600">workspace</span></div>
-            </div>
-          </div>
+             </div>
+           </div>
 
-          <nav class="flex gap-1 overflow-x-auto px-3 pb-3 lg:block lg:flex-1 lg:space-y-1 lg:overflow-visible lg:px-3 lg:pt-8">
-            <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition lg:w-full" :class="activeView === 'overview' ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('overview')">
+           <div v-if="selectedChatID" class="mx-5 mb-2 border-t border-white/[0.07] pt-5 lg:mx-6">
+             <p class="truncate text-sm font-semibold text-zinc-200">{{ selectedChat?.name }}</p>
+             <button type="button" class="mt-3 inline-flex items-center gap-2 text-xs text-zinc-500 transition hover:text-amber-200" @click="selectChat(null)">
+               <span aria-hidden="true">←</span>
+               Back to groups
+             </button>
+           </div>
+
+            <nav class="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-1 lg:flex-col lg:space-y-1 lg:overflow-y-auto lg:px-3 lg:pt-8">
+             <button v-if="!selectedChatID" type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition lg:w-full" :class="activeView === 'overview' ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('overview')">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
               Overview
             </button>
-            <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'chats' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('chats')">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.8 8.8 0 0 1-3.3-.6L4 20l1.6-3.5A7.3 7.3 0 0 1 4.5 12 7.5 7.5 0 0 1 12 4.5c4.4 0 8 3.1 8 7Z" /></svg>
-              Chats
-            </button>
-            <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'activity' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('activity')">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><path d="M4 17h4V7H4v10Zm6 0h4V4h-4v13Zm6 0h4v-7h-4v7Z" /></svg>
-              Activity
-            </button>
-            <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'commands' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('commands')">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><path d="m8 9 3 3-3 3M13 15h4M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /></svg>
-              Commands
-            </button>
-          </nav>
+              <button v-if="!selectedChatID" v-for="chat in chats" :key="chat.chat_id" type="button" class="flex min-w-0 shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition lg:w-full" @click="selectChat(chat.chat_id)">
+               <span :class="chat.color" class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold text-zinc-950">{{ chat.initials }}</span>
+               <span class="min-w-0 truncate">{{ chat.name }}</span>
+              </button>
+              <template v-if="selectedChatID">
+                <button v-for="tab in ([
+                  { value: 'activity', label: 'Activity' },
+                  { value: 'commands', label: 'Commands' }
+                ] as const)" :key="tab.value" type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === tab.value ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView(tab.value)">
+                  <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.05] text-[10px] font-bold">{{ tab.label.slice(0, 1) }}</span>
+                  {{ tab.label }}
+                </button>
+              </template>
+           </nav>
 
           <div class="border-t border-white/[0.07] p-4 lg:p-5">
             <div class="mb-3 px-1 text-[10px] uppercase tracking-[0.18em] text-zinc-700">Signed in as</div>
@@ -419,21 +482,21 @@ onUnmounted(() => {
                <div>
                <p class="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-600">Command center</p>
               <h1 v-if="activeView === 'overview'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Good morning, {{ displayName }}.</h1>
-              <h1 v-else-if="activeView === 'chats'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Your chats</h1>
+               <h1 v-else-if="activeView === 'chats'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Your chats</h1>
                <h1 v-else-if="activeView === 'activity'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Recent activity</h1>
                <h1 v-else class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Custom commands</h1>
               <p v-if="activeView === 'overview'" class="mt-3 max-w-xl text-zinc-500">Все важное о твоих чатах, командах и модерации в одном месте.</p>
               <p v-else-if="activeView === 'chats'" class="mt-3 max-w-xl text-zinc-500">Connected Telegram groups and their moderation status.</p>
                 <p v-else-if="activeView === 'activity'" class="mt-3 max-w-xl text-zinc-500">A complete log of moderation actions in your workspace.</p>
-                <p v-else class="mt-3 max-w-xl text-zinc-500">Команды, которые бот будет выполнять в твоих Telegram-группах.</p>
-               </div>
+               <p v-else class="mt-3 max-w-xl text-zinc-500">Команды и настройки группы {{ selectedChat?.name || '' }}.</p>
+                </div>
                <button v-if="activeView === 'commands'" type="button" class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200" @click="openCreateCommand">
                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>
                  Add command
                </button>
-             </div>
+              </div>
 
-            <div v-if="activeView === 'overview'" class="space-y-6">
+             <div v-if="activeView === 'overview'" class="space-y-6">
               <div class="grid gap-4 sm:grid-cols-3">
                 <div class="rounded-2xl border border-amber-300/20 bg-gradient-to-br from-amber-300/[0.12] to-transparent p-5"><p class="text-xs text-amber-200/70">Protected chats</p><p class="mt-5 text-4xl font-semibold">{{ dashboard?.protected_chats || 0 }}</p><p class="mt-2 text-xs text-zinc-500">All systems operational</p></div>
                 <div class="rounded-2xl border border-white/[0.07] bg-white/[0.035] p-5"><p class="text-xs text-zinc-500">Actions this week</p><p class="mt-5 text-4xl font-semibold">{{ dashboard?.actions_this_week || 0 }}</p><p class="mt-2 text-xs text-emerald-300">From the action log</p></div>
@@ -446,7 +509,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div v-else-if="activeView === 'chats'" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+             <div v-else-if="activeView === 'chats'" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <article v-for="chat in chats" :key="chat.name" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6 transition hover:border-white/[0.14]">
                 <div class="flex items-start justify-between gap-4">
                   <div :class="chat.color" class="flex h-11 w-11 items-center justify-center rounded-xl text-xs font-bold text-zinc-950">{{ chat.initials }}</div>

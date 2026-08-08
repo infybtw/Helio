@@ -251,6 +251,15 @@ func (a *Auth) ownedChatIDs(c *gin.Context) ([]int64, error) {
 			owned = append(owned, chatID)
 		}
 	}
+	if selected := c.Query("chat_id"); selected != "" {
+		selectedID, err := strconv.ParseInt(selected, 10, 64)
+		a.log.Info("dashboard chat scope requested", "requested_chat_id", selected, "parsed_chat_id", selectedID, "owned_chat_ids", owned)
+		if err != nil || selectedID == 0 || !containsChatID(owned, selectedID) {
+			return []int64{}, nil
+		}
+		a.log.Info("dashboard chat scope accepted", "chat_id", selectedID)
+		return []int64{selectedID}, nil
+	}
 	return owned, nil
 }
 
@@ -265,6 +274,7 @@ func (a *Auth) ListCommands(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load commands"})
 		return
 	}
+	a.log.Info("dashboard commands loaded", "requested_chat_id", c.Query("chat_id"), "chat_ids", chatIDs, "command_count", len(commands))
 	c.JSON(http.StatusOK, gin.H{"commands": commands})
 }
 
