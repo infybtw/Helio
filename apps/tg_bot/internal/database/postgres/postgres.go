@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tg_bot/internal/database"
@@ -79,9 +80,9 @@ func (p *Postgres) RecordMessage(ctx context.Context, message database.MessageRe
 func (p *Postgres) RecordAction(ctx context.Context, action database.ActionRecord) error {
 	_, err := p.pool.Exec(ctx,
 		`INSERT INTO action_logs
-		 (chat_id, message_id, actor_id, actor_username, action, target_message_id, target_user_id, target_username)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		action.ChatID, action.MessageID, action.ActorID, action.ActorUsername, action.Action,
+		 (chat_id, message_id, actor_id, actor_first_name, action, event_type, target_message_id, target_user_id, target_username)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		action.ChatID, action.MessageID, action.ActorID, action.ActorFirstName, action.Action, action.EventType,
 		action.TargetMessageID, action.TargetUserID, action.TargetUsername,
 	)
 	if err != nil {
@@ -207,30 +208,274 @@ func (p *Postgres) DashboardData(ctx context.Context, chatIDs []int64) (database
 		return data, fmt.Errorf("iterate dashboard chats: %w", err)
 	}
 
-	activityRows, err := p.pool.Query(ctx, `
-		SELECT a.action, a.actor_username, COALESCE(NULLIF(t.title, ''), t.username, 'Unknown chat'),
+	activity, err := p.ListActivity(ctx, chatIDs, "", 5, 0)
+	if err != nil {
+		return data, err
+	}
+	data.Activity = activity.Items
+	return data, nil
+}
+
+func (p *Postgres) ListActivity(ctx context.Context, chatIDs []int64, eventType string, limit, offset int) (database.ActivityPage, error) {
+	page := database.ActivityPage{Items: []database.DashboardActivity{}}
+	if len(chatIDs) == 0 {
+		return page, nil
+	}
+	if err := p.pool.QueryRow(ctx, `
+		SELECT count(*) FROM action_logs
+		WHERE chat_id = ANY($1) AND ($2 = '' OR event_type = $2)`, chatIDs, eventType).Scan(&page.Total); err != nil {
+		return page, fmt.Errorf("count activity: %w", err)
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT a.action, a.event_type, COALESCE(NULLIF(a.actor_first_name, ''), 'Unknown user'), COALESCE(NULLIF(t.title, ''), t.username, 'Unknown chat'),
 		       a.target_message_id, a.created_at
 		FROM action_logs a
 		JOIN tracked_chats t ON t.chat_id = a.chat_id
-		WHERE a.chat_id = ANY($1)
-		ORDER BY a.created_at DESC LIMIT 20`, chatIDs)
+		WHERE a.chat_id = ANY($1) AND ($2 = '' OR a.event_type = $2)
+		ORDER BY a.created_at DESC LIMIT $3 OFFSET $4`, chatIDs, eventType, limit, offset)
 	if err != nil {
-		return data, fmt.Errorf("list dashboard activity: %w", err)
+		return page, fmt.Errorf("list activity: %w", err)
 	}
-	defer activityRows.Close()
-	for activityRows.Next() {
+	defer rows.Close()
+	for rows.Next() {
 		var item database.DashboardActivity
 		var createdAt time.Time
-		if err := activityRows.Scan(&item.Action, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
-			return data, fmt.Errorf("scan dashboard activity: %w", err)
+		if err := rows.Scan(&item.Action, &item.EventType, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
+			return page, fmt.Errorf("scan activity: %w", err)
 		}
 		item.CreatedAt = createdAt.Format(time.RFC3339)
-		data.Activity = append(data.Activity, item)
+		page.Items = append(page.Items, item)
 	}
-	if err := activityRows.Err(); err != nil {
-		return data, fmt.Errorf("iterate dashboard activity: %w", err)
+	if err := rows.Err(); err != nil {
+		return page, fmt.Errorf("iterate activity: %w", err)
 	}
-	return data, nil
+	return page, nil
+}
+
+func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]database.CustomCommand, error) {
+	commands := make([]database.CustomCommand, 0)
+	if len(chatIDs) == 0 {
+		return commands, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, chat_id, name, enabled, permission, created_at
+		FROM custom_commands WHERE chat_id = ANY($1) ORDER BY name`, chatIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list custom commands: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var command database.CustomCommand
+		var createdAt time.Time
+		if err := rows.Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan custom command: %w", err)
+		}
+		command.CreatedAt = createdAt.Format(time.RFC3339)
+		command.Actions, err = p.listCustomCommandActions(ctx, command.ID)
+		if err != nil {
+			return nil, err
+		}
+		command.Aliases, err = p.listCustomCommandAliases(ctx, command.ID)
+		if err != nil {
+			return nil, err
+		}
+		commands = append(commands, command)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate custom commands: %w", err)
+	}
+	return commands, nil
+}
+
+func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, aliases []string, actions []database.CustomCommandAction) (database.CustomCommand, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return command, fmt.Errorf("begin custom command transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO custom_commands (chat_id, name, response, created_by, permission)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, chat_id, name, enabled, permission, created_at`, chatID, name, actions[0].Payload, createdBy, permission).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt); err != nil {
+		return command, fmt.Errorf("create custom command: %w", err)
+	}
+	if err := insertCustomCommandActions(ctx, tx, command.ID, actions); err != nil {
+		return command, err
+	}
+	if err := insertCustomCommandAliases(ctx, tx, command.ID, chatID, aliases); err != nil {
+		return command, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return command, fmt.Errorf("commit custom command transaction: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	command.Actions = actions
+	command.Aliases = aliases
+	return command, nil
+}
+
+func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, aliases []string, actions []database.CustomCommandAction) (database.CustomCommand, bool, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	if len(chatIDs) == 0 {
+		return command, false, nil
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return command, false, fmt.Errorf("begin custom command transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `
+		UPDATE custom_commands SET chat_id = $2, name = $3, response = $4, permission = $5
+		WHERE id = $1 AND chat_id = ANY($6)
+		RETURNING id, chat_id, name, enabled, permission, created_at`, id, chatID, name, actions[0].Payload, permission, chatIDs).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
+	if err == pgx.ErrNoRows {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, fmt.Errorf("update custom command: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM custom_command_actions WHERE command_id = $1`, id); err != nil {
+		return command, false, fmt.Errorf("delete custom command actions: %w", err)
+	}
+	if err := insertCustomCommandActions(ctx, tx, id, actions); err != nil {
+		return command, false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM custom_command_aliases WHERE command_id = $1`, id); err != nil {
+		return command, false, fmt.Errorf("delete custom command aliases: %w", err)
+	}
+	if err := insertCustomCommandAliases(ctx, tx, id, chatID, aliases); err != nil {
+		return command, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return command, false, fmt.Errorf("commit custom command transaction: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	command.Actions = actions
+	command.Aliases = aliases
+	return command, true, nil
+}
+
+func (p *Postgres) DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (database.CustomCommand, bool, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	if len(chatIDs) == 0 {
+		return command, false, nil
+	}
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM custom_commands WHERE id = $1 AND chat_id = ANY($2)
+		RETURNING id, chat_id, name, enabled, permission, created_at`, id, chatIDs).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
+	if err == pgx.ErrNoRows {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, fmt.Errorf("delete custom command: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	return command, true, nil
+}
+
+func (p *Postgres) SetCustomCommandEnabled(ctx context.Context, id int64, enabled bool, chatIDs []int64) (bool, error) {
+	if len(chatIDs) == 0 {
+		return false, nil
+	}
+	tag, err := p.pool.Exec(ctx, `UPDATE custom_commands SET enabled = $2 WHERE id = $1 AND chat_id = ANY($3)`, id, enabled, chatIDs)
+	if err != nil {
+		return false, fmt.Errorf("set custom command enabled: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (p *Postgres) FindCustomCommand(ctx context.Context, chatID int64, name string) (database.CustomCommand, bool, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, chat_id, name, enabled, permission, created_at
+		FROM custom_commands c
+		WHERE c.chat_id = $1 AND c.enabled = TRUE
+		  AND (c.name = $2 OR EXISTS (SELECT 1 FROM custom_command_aliases ca WHERE ca.command_id = c.id AND ca.chat_id = $1 AND ca.alias = $2))
+		ORDER BY CASE WHEN c.name = $2 THEN 0 ELSE 1 END
+		LIMIT 1`, chatID, name).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
+	if err == pgx.ErrNoRows {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, fmt.Errorf("find custom command: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	command.Actions, err = p.listCustomCommandActions(ctx, command.ID)
+	if err != nil {
+		return command, false, err
+	}
+	command.Aliases, err = p.listCustomCommandAliases(ctx, command.ID)
+	if err != nil {
+		return command, false, err
+	}
+	return command, true, nil
+}
+
+func (p *Postgres) listCustomCommandAliases(ctx context.Context, commandID int64) ([]string, error) {
+	rows, err := p.pool.Query(ctx, `SELECT alias FROM custom_command_aliases WHERE command_id = $1 ORDER BY alias`, commandID)
+	if err != nil {
+		return nil, fmt.Errorf("list custom command aliases: %w", err)
+	}
+	defer rows.Close()
+	aliases := make([]string, 0)
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			return nil, fmt.Errorf("scan custom command alias: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate custom command aliases: %w", err)
+	}
+	return aliases, nil
+}
+
+func insertCustomCommandAliases(ctx context.Context, tx pgx.Tx, commandID, chatID int64, aliases []string) error {
+	for _, alias := range aliases {
+		if _, err := tx.Exec(ctx, `INSERT INTO custom_command_aliases (command_id, chat_id, alias) VALUES ($1, $2, $3)`, commandID, chatID, alias); err != nil {
+			return fmt.Errorf("create custom command alias: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *Postgres) listCustomCommandActions(ctx context.Context, commandID int64) ([]database.CustomCommandAction, error) {
+	rows, err := p.pool.Query(ctx, `SELECT action_type, payload FROM custom_command_actions WHERE command_id = $1 ORDER BY position`, commandID)
+	if err != nil {
+		return nil, fmt.Errorf("list custom command actions: %w", err)
+	}
+	defer rows.Close()
+	actions := make([]database.CustomCommandAction, 0)
+	for rows.Next() {
+		var action database.CustomCommandAction
+		if err := rows.Scan(&action.Type, &action.Payload); err != nil {
+			return nil, fmt.Errorf("scan custom command action: %w", err)
+		}
+		actions = append(actions, action)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate custom command actions: %w", err)
+	}
+	return actions, nil
+}
+
+func insertCustomCommandActions(ctx context.Context, tx pgx.Tx, commandID int64, actions []database.CustomCommandAction) error {
+	for position, action := range actions {
+		if _, err := tx.Exec(ctx, `INSERT INTO custom_command_actions (command_id, action_type, payload, position) VALUES ($1, $2, $3, $4)`, commandID, action.Type, action.Payload, position); err != nil {
+			return fmt.Errorf("create custom command action: %w", err)
+		}
+	}
+	return nil
 }
 
 func initials(name string) string {

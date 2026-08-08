@@ -16,10 +16,11 @@ func recordAction(ctx context.Context, st database.Store, msg *telegram.Message,
 		ChatID:    msg.Chat.ID,
 		MessageID: msg.MessageID,
 		Action:    action,
+		EventType: "moderation",
 	}
 	if msg.From != nil {
 		record.ActorID = msg.From.ID
-		record.ActorUsername = msg.From.Username
+		record.ActorFirstName = msg.From.FirstName
 	}
 	if target != nil {
 		record.TargetMessageID = target.MessageID

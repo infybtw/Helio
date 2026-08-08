@@ -16,7 +16,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot
+      DATABASE_URL: postgres://heliobot:heliobot@localhost:5432/heliobot
     depends_on:
       migrations:
         condition: service_completed_successfully

@@ -22,8 +22,9 @@ type ActionRecord struct {
 	ChatID          int64
 	MessageID       int64
 	ActorID         int64
-	ActorUsername   string
+	ActorFirstName  string
 	Action          string
+	EventType       string
 	TargetMessageID int64
 	TargetUserID    int64
 	TargetUsername  string
@@ -42,6 +43,7 @@ type DashboardChat struct {
 
 type DashboardActivity struct {
 	Action          string `json:"action"`
+	EventType       string `json:"event_type"`
 	Actor           string `json:"actor"`
 	Chat            string `json:"chat"`
 	TargetMessageID int64  `json:"target_message_id"`
@@ -54,6 +56,27 @@ type DashboardData struct {
 	MessagesCleaned int64               `json:"messages_cleaned"`
 	Chats           []DashboardChat     `json:"chats"`
 	Activity        []DashboardActivity `json:"activity"`
+}
+
+type ActivityPage struct {
+	Items []DashboardActivity `json:"items"`
+	Total int64               `json:"total"`
+}
+
+type CustomCommand struct {
+	ID         int64                 `json:"id"`
+	ChatID     int64                 `json:"chat_id"`
+	Name       string                `json:"name"`
+	Aliases    []string              `json:"aliases"`
+	Actions    []CustomCommandAction `json:"actions"`
+	Enabled    bool                  `json:"enabled"`
+	Permission string                `json:"permission"`
+	CreatedAt  string                `json:"created_at"`
+}
+
+type CustomCommandAction struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
 }
 
 // Store is the abstract database interface. Implementations hide all SQL.
@@ -75,6 +98,13 @@ type Store interface {
 	RevokeChatAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 	// DashboardData returns moderation metrics for the supplied chats.
 	DashboardData(ctx context.Context, chatIDs []int64) (DashboardData, error)
+	ListActivity(ctx context.Context, chatIDs []int64, eventType string, limit, offset int) (ActivityPage, error)
+	ListCustomCommands(ctx context.Context, chatIDs []int64) ([]CustomCommand, error)
+	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, aliases []string, actions []CustomCommandAction) (CustomCommand, error)
+	UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, aliases []string, actions []CustomCommandAction) (CustomCommand, bool, error)
+	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (CustomCommand, bool, error)
+	SetCustomCommandEnabled(ctx context.Context, id int64, enabled bool, chatIDs []int64) (bool, error)
+	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
 	// Close releases database resources.
 	Close()
 }

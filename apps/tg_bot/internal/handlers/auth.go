@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -190,19 +191,11 @@ func (a *Auth) Me(c *gin.Context) {
 
 // DashboardOverview returns moderation metrics for chats visible to the user.
 func (a *Auth) DashboardOverview(c *gin.Context) {
-	chatIDs, err := a.db.ListTrackedChatIDs(c.Request.Context())
+	ownedChatIDs, err := a.ownedChatIDs(c)
 	if err != nil {
 		a.log.Error("failed to list dashboard chats", "error", err)
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load dashboard data"})
 		return
-	}
-	session := SessionFromContext(c)
-	ownedChatIDs := make([]int64, 0, len(chatIDs))
-	for _, chatID := range chatIDs {
-		member, err := a.client.GetChatMember(c.Request.Context(), chatID, session.UserID)
-		if err == nil && member.Status == "creator" {
-			ownedChatIDs = append(ownedChatIDs, chatID)
-		}
 	}
 	data, err := a.db.DashboardData(c.Request.Context(), ownedChatIDs)
 	if err != nil {
@@ -219,6 +212,270 @@ func (a *Auth) DashboardOverview(c *gin.Context) {
 		data.Chats[i].Members = members
 	}
 	c.JSON(http.StatusOK, data)
+}
+
+func (a *Auth) ListActivity(c *gin.Context) {
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "page must be a positive integer"})
+		return
+	}
+	eventType := c.Query("type")
+	if eventType != "" && eventType != "custom" && eventType != "moderation" && eventType != "info" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid activity type"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load activity"})
+		return
+	}
+	activity, err := a.db.ListActivity(c.Request.Context(), chatIDs, eventType, 50, (page-1)*50)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load activity"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": activity.Items, "total": activity.Total, "page": page, "per_page": 50})
+}
+
+func (a *Auth) ownedChatIDs(c *gin.Context) ([]int64, error) {
+	chatIDs, err := a.db.ListTrackedChatIDs(c.Request.Context())
+	if err != nil {
+		return nil, err
+	}
+	session := SessionFromContext(c)
+	owned := make([]int64, 0, len(chatIDs))
+	for _, chatID := range chatIDs {
+		member, err := a.client.GetChatMember(c.Request.Context(), chatID, session.UserID)
+		if err == nil && member.Status == "creator" {
+			owned = append(owned, chatID)
+		}
+	}
+	return owned, nil
+}
+
+func (a *Auth) ListCommands(c *gin.Context) {
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load commands"})
+		return
+	}
+	commands, err := a.db.ListCustomCommands(c.Request.Context(), chatIDs)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load commands"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"commands": commands})
+}
+
+type createCommandRequest struct {
+	ChatID     int64                          `json:"chat_id"`
+	Name       string                         `json:"name"`
+	Permission string                         `json:"permission"`
+	Aliases    []string                       `json:"aliases"`
+	Actions    []database.CustomCommandAction `json:"actions"`
+}
+
+func (a *Auth) CreateCommand(c *gin.Context) {
+	var request createCommandRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
+	request.Aliases = normalizeAliases(request.Aliases)
+	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
+	if !validCommandRequest(request) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
+		return
+	}
+	ownedChatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	if !containsChatID(ownedChatIDs, request.ChatID) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
+		return
+	}
+	session := SessionFromContext(c)
+	command, err := a.db.CreateCustomCommand(c.Request.Context(), request.ChatID, session.UserID, "!"+request.Name, request.Permission, request.Aliases, request.Actions)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to create command"})
+		return
+	}
+	a.recordCommandActivity(c, command, "created")
+	c.JSON(http.StatusCreated, command)
+}
+
+func (a *Auth) UpdateCommand(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command id"})
+		return
+	}
+	var request createCommandRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
+	request.Aliases = normalizeAliases(request.Aliases)
+	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
+	if !validCommandRequest(request) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	if !containsChatID(chatIDs, request.ChatID) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
+		return
+	}
+	command, updated, err := a.db.UpdateCustomCommand(c.Request.Context(), id, request.ChatID, chatIDs, "!"+request.Name, request.Permission, request.Aliases, request.Actions)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to update command"})
+		return
+	}
+	if !updated {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
+		return
+	}
+	a.recordCommandActivity(c, command, "updated")
+	c.JSON(http.StatusOK, command)
+}
+
+func validCommandRequest(request createCommandRequest) bool {
+	if request.ChatID == 0 || request.Name == "" || len(request.Name) > 32 || len(request.Actions) == 0 || len(request.Aliases) > 10 || (request.Permission != "user" && request.Permission != "moderator" && request.Permission != "owner") || strings.ContainsAny(request.Name, " !\t\r\n") {
+		return false
+	}
+	seenAliases := make(map[string]struct{}, len(request.Aliases))
+	for _, alias := range request.Aliases {
+		if alias == "!"+request.Name || alias == "" || len(alias) > 33 || strings.ContainsAny(strings.TrimPrefix(alias, "!"), " !\t\r\n") {
+			return false
+		}
+		if _, exists := seenAliases[alias]; exists {
+			return false
+		}
+		seenAliases[alias] = struct{}{}
+	}
+	for i := range request.Actions {
+		request.Actions[i].Payload = strings.TrimSpace(request.Actions[i].Payload)
+		if request.Actions[i].Type != "send_message" && request.Actions[i].Type != "reply_message" && request.Actions[i].Type != "mute" && request.Actions[i].Type != "delete_message" {
+			return false
+		}
+		if (request.Actions[i].Type == "send_message" || request.Actions[i].Type == "reply_message") && (request.Actions[i].Payload == "" || len(request.Actions[i].Payload) > 4096) {
+			return false
+		}
+		if request.Actions[i].Type == "mute" && request.Actions[i].Payload == "" {
+			request.Actions[i].Payload = "30m"
+		}
+		if request.Actions[i].Type == "delete_message" {
+			request.Actions[i].Payload = ""
+		}
+		if len(request.Actions[i].Payload) > 4096 {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeAliases(aliases []string) []string {
+	result := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		alias = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(alias, "!")))
+		if alias != "" {
+			result = append(result, "!"+alias)
+		}
+	}
+	return result
+}
+
+func (a *Auth) DeleteCommand(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command id"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	command, deleted, err := a.db.DeleteCustomCommand(c.Request.Context(), id, chatIDs)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to delete command"})
+		return
+	}
+	if !deleted {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
+		return
+	}
+	a.recordCommandActivity(c, command, "deleted")
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *Auth) SetCommandEnabled(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command id"})
+		return
+	}
+	var request struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	updated, err := a.db.SetCustomCommandEnabled(c.Request.Context(), id, request.Enabled, chatIDs)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to update command status"})
+		return
+	}
+	if !updated {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": request.Enabled})
+}
+
+func (a *Auth) recordCommandActivity(c *gin.Context, command database.CustomCommand, event string) {
+	session := SessionFromContext(c)
+	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{
+		ChatID:         command.ChatID,
+		ActorID:        session.UserID,
+		ActorFirstName: session.FirstName,
+		Action:         "custom command " + event + ": " + command.Name,
+		EventType:      "info",
+	}); err != nil {
+		a.log.Warn("failed to record custom command management activity", "error", err, "command_id", command.ID, "event", event)
+	}
+}
+
+func containsChatID(chatIDs []int64, wanted int64) bool {
+	for _, chatID := range chatIDs {
+		if chatID == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // RequireAuth is a Gin middleware that ensures a valid session exists.
