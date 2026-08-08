@@ -80,9 +80,9 @@ func (p *Postgres) RecordMessage(ctx context.Context, message database.MessageRe
 func (p *Postgres) RecordAction(ctx context.Context, action database.ActionRecord) error {
 	_, err := p.pool.Exec(ctx,
 		`INSERT INTO action_logs
-		 (chat_id, message_id, actor_id, actor_username, action, target_message_id, target_user_id, target_username)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		action.ChatID, action.MessageID, action.ActorID, action.ActorUsername, action.Action,
+		 (chat_id, message_id, actor_id, actor_first_name, action, event_type, target_message_id, target_user_id, target_username)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		action.ChatID, action.MessageID, action.ActorID, action.ActorFirstName, action.Action, action.EventType,
 		action.TargetMessageID, action.TargetUserID, action.TargetUsername,
 	)
 	if err != nil {
@@ -209,7 +209,7 @@ func (p *Postgres) DashboardData(ctx context.Context, chatIDs []int64) (database
 	}
 
 	activityRows, err := p.pool.Query(ctx, `
-		SELECT a.action, a.actor_username, COALESCE(NULLIF(t.title, ''), t.username, 'Unknown chat'),
+		SELECT a.action, a.event_type, COALESCE(NULLIF(a.actor_first_name, ''), 'Unknown user'), COALESCE(NULLIF(t.title, ''), t.username, 'Unknown chat'),
 		       a.target_message_id, a.created_at
 		FROM action_logs a
 		JOIN tracked_chats t ON t.chat_id = a.chat_id
@@ -222,7 +222,7 @@ func (p *Postgres) DashboardData(ctx context.Context, chatIDs []int64) (database
 	for activityRows.Next() {
 		var item database.DashboardActivity
 		var createdAt time.Time
-		if err := activityRows.Scan(&item.Action, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
+		if err := activityRows.Scan(&item.Action, &item.EventType, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
 			return data, fmt.Errorf("scan dashboard activity: %w", err)
 		}
 		item.CreatedAt = createdAt.Format(time.RFC3339)

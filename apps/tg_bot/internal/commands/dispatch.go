@@ -85,10 +85,11 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 			ChatID:    msg.Chat.ID,
 			MessageID: msg.MessageID,
 			Action:    custom.Name,
+			EventType: "custom",
 		}
 		if msg.From != nil {
 			action.ActorID = msg.From.ID
-			action.ActorUsername = msg.From.Username
+			action.ActorFirstName = msg.From.FirstName
 		}
 		if err := st.RecordAction(ctx, action); err != nil {
 			log.Warn("failed to record custom command activity", "error", err, "chat_id", msg.Chat.ID, "command", custom.Name)

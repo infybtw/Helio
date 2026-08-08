@@ -22,8 +22,9 @@ type ActionRecord struct {
 	ChatID          int64
 	MessageID       int64
 	ActorID         int64
-	ActorUsername   string
+	ActorFirstName  string
 	Action          string
+	EventType       string
 	TargetMessageID int64
 	TargetUserID    int64
 	TargetUsername  string
@@ -42,6 +43,7 @@ type DashboardChat struct {
 
 type DashboardActivity struct {
 	Action          string `json:"action"`
+	EventType       string `json:"event_type"`
 	Actor           string `json:"actor"`
 	Chat            string `json:"chat"`
 	TargetMessageID int64  `json:"target_message_id"`

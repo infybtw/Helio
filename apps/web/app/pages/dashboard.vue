@@ -35,6 +35,7 @@ interface CustomCommand {
 }
 interface DashboardActivity {
   action: string
+  event_type: 'custom' | 'moderation' | 'info'
   actor: string
   chat: string
   created_at: string
@@ -69,6 +70,7 @@ const commandModalOpen = ref(false)
 const refreshingActivity = ref(false)
 const activityUpdatedAt = ref<number | null>(null)
 const activityClock = ref(Date.now())
+const activityType = ref<'all' | DashboardActivity['event_type']>('all')
 let activityTimer: ReturnType<typeof setInterval> | undefined
 
 function navigateToView(view: DashboardView) {
@@ -106,8 +108,11 @@ function formatActivityDate(value: string) {
   return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString('ru-RU')
 }
 
-const activity = computed(() => dashboard.value?.activity.map((item) => ({
+const activity = computed(() => dashboard.value?.activity
+  .filter((item) => activityType.value === 'all' || item.event_type === activityType.value)
+  .map((item) => ({
   command: item.action,
+  type: item.event_type,
   user: item.actor || 'Unknown user',
   chat: item.chat,
   time: formatActivityDate(item.created_at),
@@ -325,13 +330,16 @@ onUnmounted(() => {
                  <div class="flex items-center gap-2 text-xs text-zinc-600"><span class="h-2 w-2 rounded-full bg-emerald-400"></span><span>Updated {{ activityAge }}</span></div>
                  <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-500 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" :disabled="refreshingActivity" @click="refreshActivity"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-4 w-4" :class="refreshingActivity ? 'animate-spin' : ''"><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4" /></svg>Refresh</button>
                </div>
+               <div class="mb-4 flex gap-2 overflow-x-auto">
+                 <button v-for="type in ['all', 'custom', 'moderation', 'info'] as const" :key="type" type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition" :class="activityType === type ? 'bg-amber-300/15 text-amber-200' : 'bg-white/[0.04] text-zinc-500 hover:text-zinc-200'" @click="activityType = type">{{ type }}</button>
+               </div>
                <div class="divide-y divide-white/[0.06]">
                 <div v-for="item in activity" :key="item.command + item.time" class="flex items-center gap-4 py-5 first:pt-0">
                   <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-xs text-zinc-500">↗</div>
-                  <div class="min-w-0 flex-1"><p class="text-sm"><code :class="item.tone" class="font-mono text-xs">{{ item.command }}</code> <span class="text-zinc-500">by {{ item.user }}</span></p><p class="mt-1 truncate text-xs text-zinc-600">{{ item.chat }}</p></div>
+                  <div class="min-w-0 flex-1"><p class="text-sm"><code :class="item.tone" class="font-mono text-xs">{{ item.command }}</code> <span class="ml-2 rounded bg-white/[0.05] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500">{{ item.type }}</span> <span class="text-zinc-500">by {{ item.user }}</span></p><p class="mt-1 truncate text-xs text-zinc-600">{{ item.chat }}</p></div>
                   <time class="shrink-0 text-xs text-zinc-600">{{ item.time }}</time>
                 </div>
-                <div v-if="!activity.length" class="py-8 text-sm text-zinc-600">No activity recorded yet.</div>
+                <div v-if="!activity.length" class="py-8 text-sm text-zinc-600">No events for this type.</div>
                </div>
              </div>
 
