@@ -33,6 +33,46 @@ func (p *Postgres) Close() {
 	p.pool.Close()
 }
 
+// TrackChat records a chat where the bot received a trusted Telegram update.
+func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error {
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO tracked_chats (chat_id, chat_type, title, username, last_seen_at)
+		 VALUES ($1, $2, $3, $4, now())
+		 ON CONFLICT (chat_id) DO UPDATE SET
+		   chat_type = EXCLUDED.chat_type,
+		   title = EXCLUDED.title,
+		   username = EXCLUDED.username,
+		   last_seen_at = now()`,
+		chatID, chatType, title, username,
+	)
+	if err != nil {
+		return fmt.Errorf("track chat: %w", err)
+	}
+	return nil
+}
+
+// ListTrackedChatIDs returns chats in which the bot has received updates.
+func (p *Postgres) ListTrackedChatIDs(ctx context.Context) ([]int64, error) {
+	rows, err := p.pool.Query(ctx, `SELECT chat_id FROM tracked_chats ORDER BY last_seen_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list tracked chats: %w", err)
+	}
+	defer rows.Close()
+
+	chatIDs := make([]int64, 0)
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, fmt.Errorf("scan tracked chat: %w", err)
+		}
+		chatIDs = append(chatIDs, chatID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tracked chats: %w", err)
+	}
+	return chatIDs, nil
+}
+
 // IsChatAdmin reports whether the user has been granted command rights in the chat.
 func (p *Postgres) IsChatAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
 	var exists bool

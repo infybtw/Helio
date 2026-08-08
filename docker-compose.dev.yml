@@ -4,6 +4,8 @@ services:
       context: ./apps/web
     ports:
       - "3000:3000"
+    environment:
+      NUXT_PUBLIC_API_BASE_URL: http://localhost:8080
     restart: unless-stopped
 
   tg_bot:
@@ -14,7 +16,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-heliobot}:${POSTGRES_PASSWORD:-heliobot}@postgres:5432/${POSTGRES_DB:-heliobot}
+      DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -24,7 +26,7 @@ services:
     build:
       context: ./apps/migrations
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-heliobot}:${POSTGRES_PASSWORD:-heliobot}@postgres:5432/${POSTGRES_DB:-heliobot}
+      DATABASE_URL: postgres://heliobot:heliobot@localhost:5432/heliobot?ssl=disable
     depends_on:
       postgres:
         condition: service_healthy

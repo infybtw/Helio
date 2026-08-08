@@ -4,12 +4,13 @@ import "encoding/json"
 
 // Update represents an incoming update from Telegram.
 type Update struct {
-	UpdateID          int64          `json:"update_id"`
-	Message           *Message       `json:"message,omitempty"`
-	EditedMessage     *Message       `json:"edited_message,omitempty"`
-	ChannelPost       *Message       `json:"channel_post,omitempty"`
-	EditedChannelPost *Message       `json:"edited_channel_post,omitempty"`
-	CallbackQuery     *CallbackQuery `json:"callback_query,omitempty"`
+	UpdateID          int64              `json:"update_id"`
+	Message           *Message           `json:"message,omitempty"`
+	EditedMessage     *Message           `json:"edited_message,omitempty"`
+	ChannelPost       *Message           `json:"channel_post,omitempty"`
+	EditedChannelPost *Message           `json:"edited_channel_post,omitempty"`
+	MyChatMember      *ChatMemberUpdated `json:"my_chat_member,omitempty"`
+	CallbackQuery     *CallbackQuery     `json:"callback_query,omitempty"`
 }
 
 // Message represents a message.
@@ -62,6 +63,13 @@ type CallbackQuery struct {
 type ChatMember struct {
 	Status string `json:"status"`
 	User   *User  `json:"user"`
+}
+
+// ChatMemberUpdated represents a change in the bot's membership status.
+type ChatMemberUpdated struct {
+	Chat          *Chat       `json:"chat"`
+	OldChatMember *ChatMember `json:"old_chat_member"`
+	NewChatMember *ChatMember `json:"new_chat_member"`
 }
 
 // APIResponse is the generic response wrapper for the Telegram Bot API.

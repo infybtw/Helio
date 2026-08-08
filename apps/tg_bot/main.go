@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"tg_bot/internal/auth"
 	"tg_bot/internal/config"
 	"tg_bot/internal/database/postgres"
 	"tg_bot/internal/handlers"
@@ -69,8 +70,21 @@ func main() {
 	}
 	logger.Info("webhook registered", "url", cfg.WebhookURL)
 
+	sessions := auth.NewSessionManager(cfg.SessionSecret, cfg.SessionMaxAge, cfg.CookieSecure, cfg.CookieSameSite, cfg.CookieDomain)
+	// OIDC state cookie must be sent on the cross-site redirect from Telegram,
+	// so it requires SameSite=None and Secure=true.
+	stateMgr := auth.NewOIDCStateManager(cfg.SessionSecret, 600, true, "none", cfg.CookieDomain)
+	oidcClient := auth.NewOIDCClient(cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURI, cfg.OIDCScopes)
+	authHandler := handlers.NewAuth(oidcClient, stateMgr, sessions, db, client, cfg.DashboardOrigin, cfg.DashboardURL, logger)
 	webhook := handlers.NewWebhook(client, db, cfg.WebhookSecret, logger)
-	server := httpserver.New(":"+cfg.Port, cfg.WebhookPath, webhook.Handle, logger)
+	server := httpserver.New(
+		":"+cfg.Port,
+		cfg.WebhookPath,
+		webhook.Handle,
+		[]httpserver.RouteFunc{handlers.RegisterAuthRoutes(authHandler)},
+		[]string{cfg.DashboardOrigin},
+		logger,
+	)
 
 	go func() {
 		if err := server.Start(); err != nil && err != http.ErrServerClosed {

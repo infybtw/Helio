@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/joho/godotenv"
 	"github.com/pressly/goose/v3"
 )
 
@@ -19,6 +20,9 @@ var migrationsFS embed.FS
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// Load local development settings; container environments provide variables directly.
+	_ = godotenv.Load()
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
