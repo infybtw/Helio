@@ -34,7 +34,7 @@ interface CustomCommand {
   created_at: string
 }
 interface CustomCommandAction {
-  type: 'send_message'
+  type: 'send_message' | 'reply_message' | 'mute' | 'delete_message'
   payload: string
 }
 interface DashboardActivity {
@@ -79,6 +79,9 @@ const commandListError = ref<string | null>(null)
 const savingCommand = ref(false)
 const commandModalOpen = ref(false)
 const editingCommandID = ref<number | null>(null)
+const draggedActionIndex = ref<number | null>(null)
+const toastMessage = ref<string | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | undefined
 const refreshingActivity = ref(false)
 const activityUpdatedAt = ref<number | null>(null)
 const activityClock = ref(Date.now())
@@ -210,7 +213,14 @@ async function fetchAuthState() {
 }
 
 async function createCommand() {
-  if (!commandChatID.value || !commandName.value.trim() || commandActions.value.some((action) => !action.payload.trim())) return
+  if (!commandChatID.value || !commandName.value.trim()) {
+    showToast('Укажи название команды.')
+    return
+  }
+  if (commandActions.value.some((action) => (action.type === 'send_message' || action.type === 'reply_message') && !action.payload.trim())) {
+    showToast('Введи текст сообщения для действия.')
+    return
+  }
   savingCommand.value = true
   commandError.value = null
   try {
@@ -233,6 +243,12 @@ async function createCommand() {
   } finally {
     savingCommand.value = false
   }
+}
+
+function showToast(message: string) {
+  toastMessage.value = message
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastMessage.value = null }, 3500)
 }
 
 async function deleteCommand(id: number) {
@@ -270,6 +286,30 @@ function removeCommandAction(index: number) {
   if (commandActions.value.length > 1) commandActions.value.splice(index, 1)
 }
 
+function moveCommandAction(from: number, to: number) {
+  if (from === to || from < 0 || to < 0 || from >= commandActions.value.length || to >= commandActions.value.length) return
+  const [action] = commandActions.value.splice(from, 1)
+  commandActions.value.splice(to, 0, action)
+}
+
+function dropCommandAction(index: number) {
+  if (draggedActionIndex.value !== null) moveCommandAction(draggedActionIndex.value, index)
+  draggedActionIndex.value = null
+}
+
+function dragOverCommandAction(index: number) {
+  if (draggedActionIndex.value === null || draggedActionIndex.value === index) return
+  moveCommandAction(draggedActionIndex.value, index)
+  draggedActionIndex.value = index
+}
+
+function normalizeAction(action: CustomCommandAction) {
+  if (action.type === 'mute' && !action.payload) action.payload = '30m'
+  if (action.type !== 'send_message' && action.type !== 'reply_message') {
+    if (action.type === 'delete_message') action.payload = ''
+  }
+}
+
 async function logout() {
   try {
     await $fetch(`${baseURL}/api/auth/logout`, { method: 'POST', credentials: 'include' })
@@ -286,6 +326,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (activityTimer) clearInterval(activityTimer)
+  if (toastTimer) clearTimeout(toastTimer)
 })
 </script>
 
@@ -452,10 +493,12 @@ onUnmounted(() => {
         </div>
         <label class="mt-6 block text-xs text-zinc-500">Chat<select v-model="commandChatID" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-amber-300/50"><option v-for="chat in chats" :key="chat.chat_id" :value="chat.chat_id">{{ chat.name }}</option></select></label>
         <label class="mt-4 block text-xs text-zinc-500">Command<div class="mt-2 flex overflow-hidden rounded-xl border border-white/[0.1] bg-[#111418] focus-within:border-amber-300/50"><span class="border-r border-white/[0.08] px-3 py-3 font-mono text-sm text-amber-200">!</span><input v-model="commandName" maxlength="32" placeholder="welcome" class="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></div></label>
-        <div class="mt-4 space-y-3"><div v-for="(action, index) in commandActions" :key="index" class="rounded-xl border border-white/[0.08] bg-[#111418] p-3"><div class="mb-2 flex items-center justify-between"><span class="text-xs text-zinc-500">Action {{ index + 1 }} · Send message</span><button v-if="commandActions.length > 1" type="button" class="text-xs text-zinc-600 hover:text-rose-300" @click="removeCommandAction(index)">Remove</button></div><textarea v-model="action.payload" maxlength="4096" rows="4" placeholder="Welcome to the group!" class="w-full resize-none bg-transparent text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></textarea></div><button type="button" class="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-amber-200 transition hover:bg-amber-300/10" @click="addCommandAction"><span class="text-base leading-none">+</span>Add action</button></div>
+        <div class="mt-4 space-y-3"><div v-for="(action, index) in commandActions" :key="index" draggable="true" class="rounded-xl border border-white/[0.08] bg-[#111418] transition" :class="draggedActionIndex === index ? 'opacity-40' : ''" @dragstart="draggedActionIndex = index" @dragend="draggedActionIndex = null" @dragover.prevent="dragOverCommandAction(index)" @drop.prevent="dropCommandAction(index)"><div class="p-3"><div class="mb-2 flex items-center justify-between gap-3"><div class="flex min-w-0 items-center gap-2"><span class="cursor-grab text-zinc-600 active:cursor-grabbing" title="Drag to reorder">⠿</span><select v-model="action.type" class="min-w-0 rounded-lg border border-white/[0.08] bg-[#15181d] px-2 py-1.5 text-xs text-zinc-300 outline-none" @change="normalizeAction(action)"><option value="send_message">Send message</option><option value="reply_message">Reply to message</option><option value="mute">Mute reply author</option><option value="delete_message">Delete reply</option></select></div><button v-if="commandActions.length > 1" type="button" class="text-xs text-zinc-600 hover:text-rose-300" @click="removeCommandAction(index)">Remove</button></div><textarea v-if="action.type === 'send_message' || action.type === 'reply_message'" v-model="action.payload" maxlength="4096" rows="4" :placeholder="action.type === 'reply_message' ? 'Reply text' : 'Message text'" class="w-full resize-none bg-transparent text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></textarea><label v-else-if="action.type === 'mute'" class="block text-xs text-zinc-600">Duration<input v-model="action.payload" placeholder="30m" class="mt-2 w-full rounded-lg border border-white/[0.08] bg-transparent px-3 py-2 text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></label><p v-else class="text-sm text-zinc-500">Deletes the message this command replies to.</p></div></div><button type="button" class="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-amber-200 transition hover:bg-amber-300/10" @click="addCommandAction"><span class="text-base leading-none">+</span>Add action</button></div>
         <p v-if="commandError" class="mt-3 text-xs text-rose-300">{{ commandError }}</p>
         <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-xl px-4 py-2.5 text-sm text-zinc-500 hover:text-zinc-200" @click="commandModalOpen = false">Cancel</button><button :disabled="savingCommand || !commandChatID" type="submit" class="rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">{{ savingCommand ? 'Saving...' : editingCommandID ? 'Save changes' : 'Save command' }}</button></div>
       </form>
     </div>
+
+    <div v-if="toastMessage" class="fixed bottom-5 left-5 z-[60] flex max-w-sm items-center gap-3 rounded-xl border border-amber-300/20 bg-[#201d16] px-4 py-3 text-sm text-amber-100 shadow-2xl"><span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-300 text-xs font-bold text-zinc-950">!</span>{{ toastMessage }}</div>
   </main>
 </template>

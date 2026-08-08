@@ -356,7 +356,19 @@ func validCommandRequest(request createCommandRequest) bool {
 	}
 	for i := range request.Actions {
 		request.Actions[i].Payload = strings.TrimSpace(request.Actions[i].Payload)
-		if request.Actions[i].Type != "send_message" || request.Actions[i].Payload == "" || len(request.Actions[i].Payload) > 4096 {
+		if request.Actions[i].Type != "send_message" && request.Actions[i].Type != "reply_message" && request.Actions[i].Type != "mute" && request.Actions[i].Type != "delete_message" {
+			return false
+		}
+		if (request.Actions[i].Type == "send_message" || request.Actions[i].Type == "reply_message") && (request.Actions[i].Payload == "" || len(request.Actions[i].Payload) > 4096) {
+			return false
+		}
+		if request.Actions[i].Type == "mute" && request.Actions[i].Payload == "" {
+			request.Actions[i].Payload = "30m"
+		}
+		if request.Actions[i].Type == "delete_message" {
+			request.Actions[i].Payload = ""
+		}
+		if len(request.Actions[i].Payload) > 4096 {
 			return false
 		}
 	}
