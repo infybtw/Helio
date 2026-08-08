@@ -138,7 +138,6 @@ watch(() => route.query.chat_id, (chatID) => {
   commandListError.value = null
   if (session.value) {
     refreshSelectedChat().catch(() => {
-      console.error('[dashboard] failed to load selected chat', { chatID: nextChatID })
       commandListError.value = 'Не удалось загрузить команды этой группы.'
     })
   }
@@ -223,21 +222,14 @@ async function refreshSelectedChat(chatID = selectedChatID.value) {
   const query = chatID ? `?chat_id=${chatID}` : ''
   const overviewURL = `${baseURL}/api/dashboard/overview${query}`
   const commandsURL = `${baseURL}/api/dashboard/commands${query}`
-  console.log('[dashboard] loading selected chat', { chatID, requestID })
-  console.log('[dashboard] overview request', overviewURL)
   const nextDashboard = await $fetch<DashboardData>(overviewURL, { credentials: 'include' })
   activityUpdatedAt.value = Date.now()
-  console.log('[dashboard] overview response', { chatID, chats: nextDashboard.chats })
-  console.log('[dashboard] commands request', commandsURL)
   const commandData = await $fetch<{ commands: CustomCommand[] }>(commandsURL, { credentials: 'include' })
-  console.log('[dashboard] commands response', { chatID, count: commandData.commands.length, commands: commandData.commands })
   if (requestID !== selectedChatRequest || chatID !== selectedChatID.value) {
-    console.log('[dashboard] ignored stale commands response', { chatID, requestID, selectedChatID: selectedChatID.value })
     return
   }
   dashboard.value = nextDashboard
   commands.value = commandData.commands
-  console.log('[dashboard] commands applied', { chatID, count: commands.value.length })
   commandListError.value = null
   commandChatID.value = chatID || dashboard.value?.chats[0]?.chat_id || null
 }
