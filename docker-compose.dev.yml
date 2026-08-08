@@ -16,7 +16,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://heliobot:heliobot@localhost:5432/heliobot
+      DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot?sslmode=disable
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -26,7 +26,7 @@ services:
     build:
       context: ./apps/migrations
     environment:
-      DATABASE_URL: postgres://heliobot:heliobot@localhost:5432/heliobot?ssl=disable
+      DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,13 +37,13 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-heliobot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heliobot}
-      POSTGRES_DB: ${POSTGRES_DB:-heliobot}
+      POSTGRES_USER: heliobot
+      POSTGRES_PASSWORD: heliobot
+      POSTGRES_DB: heliobot
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-heliobot} -d $${POSTGRES_DB:-heliobot}"]
+      test: ["CMD-SHELL", "pg_isready -U heliobot -d heliobot"]
       interval: 5s
       timeout: 5s
       retries: 5
