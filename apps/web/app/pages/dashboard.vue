@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 useHead({
   title: 'Helio — Dashboard',
@@ -17,6 +17,7 @@ interface UserSession {
   pic?: string
 }
 interface DashboardChat {
+  chat_id: number
   name: string
   handle: string
   members: number
@@ -24,6 +25,13 @@ interface DashboardChat {
   actions: number
   status: string
   initials: string
+}
+interface CustomCommand {
+  id: number
+  chat_id: number
+  name: string
+  response: string
+  created_at: string
 }
 interface DashboardActivity {
   action: string
@@ -46,19 +54,37 @@ const error = ref<string | null>(null)
 const dashboard = ref<DashboardData | null>(null)
 const apiBase = useRuntimeConfig().public.apiBaseUrl as string | undefined
 const baseURL = apiBase || ''
-type DashboardView = 'overview' | 'chats' | 'activity'
+type DashboardView = 'overview' | 'chats' | 'activity' | 'commands'
 const route = useRoute()
 const router = useRouter()
-const initialView: DashboardView = route.query.view === 'chats' || route.query.view === 'activity' ? route.query.view : 'overview'
+const initialView: DashboardView = route.query.view === 'chats' || route.query.view === 'activity' || route.query.view === 'commands' ? route.query.view : 'overview'
 const activeView = ref<DashboardView>(initialView)
+const commands = ref<CustomCommand[]>([])
+const commandName = ref('')
+const commandResponse = ref('')
+const commandChatID = ref<number | null>(null)
+const commandError = ref<string | null>(null)
+const savingCommand = ref(false)
+const commandModalOpen = ref(false)
+const refreshingActivity = ref(false)
+const activityUpdatedAt = ref<number | null>(null)
+const activityClock = ref(Date.now())
+let activityTimer: ReturnType<typeof setInterval> | undefined
 
 function navigateToView(view: DashboardView) {
   activeView.value = view
   router.replace({ query: view === 'overview' ? {} : { view } })
+  if (view === 'activity' && session.value) {
+    refreshActivity()
+  }
 }
 
 watch(() => route.query.view, (view) => {
-  activeView.value = view === 'chats' || view === 'activity' ? view : 'overview'
+  const nextView = view === 'chats' || view === 'activity' || view === 'commands' ? view : 'overview'
+  activeView.value = nextView
+  if (nextView === 'activity' && session.value) {
+    refreshActivity()
+  }
 })
 
 const displayName = computed(() => {
@@ -88,6 +114,32 @@ const activity = computed(() => dashboard.value?.activity.map((item) => ({
   tone: item.action === '!mute' ? 'text-amber-300' : item.action === '!delete' ? 'text-rose-300' : item.action === '!grant' ? 'text-emerald-300' : 'text-violet-300'
 })) || [])
 
+async function refreshDashboard() {
+  try {
+    dashboard.value = await $fetch<DashboardData>(`${baseURL}/api/dashboard/overview`, { credentials: 'include' })
+    activityUpdatedAt.value = Date.now()
+  } catch {
+    error.value = 'Не удалось обновить активность. Попробуйте еще раз позже.'
+  }
+}
+
+async function refreshActivity() {
+  if (refreshingActivity.value) return
+  refreshingActivity.value = true
+  await refreshDashboard()
+  refreshingActivity.value = false
+}
+
+const activityAge = computed(() => {
+  if (!activityUpdatedAt.value) return 'нет данных'
+  const seconds = Math.max(0, Math.floor((activityClock.value - activityUpdatedAt.value) / 1000))
+  if (seconds < 5) return 'только что'
+  if (seconds < 60) return `${seconds} сек. назад`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} мин. назад`
+  return `${Math.floor(minutes / 60)} ч. назад`
+})
+
 async function fetchAuthState() {
   try {
     const [configRes, meRes] = await Promise.all([
@@ -97,12 +149,44 @@ async function fetchAuthState() {
     config.value = configRes
     session.value = meRes
     if (meRes) {
-      dashboard.value = await $fetch<DashboardData>(`${baseURL}/api/dashboard/overview`, { credentials: 'include' })
+      await refreshDashboard()
+      commandChatID.value = dashboard.value?.chats[0]?.chat_id || null
+      const commandData = await $fetch<{ commands: CustomCommand[] }>(`${baseURL}/api/dashboard/commands`, { credentials: 'include' })
+      commands.value = commandData.commands
     }
   } catch {
     error.value = 'Не удалось загрузить дашборд. Попробуйте еще раз позже.'
   } finally {
     loading.value = false
+  }
+}
+
+async function createCommand() {
+  if (!commandChatID.value || !commandName.value.trim() || !commandResponse.value.trim()) return
+  savingCommand.value = true
+  commandError.value = null
+  try {
+    const command = await $fetch<CustomCommand>(`${baseURL}/api/dashboard/commands`, {
+      method: 'POST', credentials: 'include',
+      body: { chat_id: commandChatID.value, name: commandName.value, response: commandResponse.value }
+    })
+    commands.value.unshift(command)
+    commandName.value = ''
+    commandResponse.value = ''
+    commandModalOpen.value = false
+  } catch {
+    commandError.value = 'Не удалось сохранить команду. Проверьте имя и попробуйте снова.'
+  } finally {
+    savingCommand.value = false
+  }
+}
+
+async function deleteCommand(id: number) {
+  try {
+    await $fetch(`${baseURL}/api/dashboard/commands/${id}`, { method: 'DELETE', credentials: 'include' })
+    commands.value = commands.value.filter((command) => command.id !== id)
+  } catch {
+    commandError.value = 'Не удалось удалить команду.'
   }
 }
 
@@ -115,7 +199,14 @@ async function logout() {
   session.value = null
 }
 
-onMounted(fetchAuthState)
+onMounted(() => {
+  activityTimer = setInterval(() => { activityClock.value = Date.now() }, 1000)
+  fetchAuthState()
+})
+
+onUnmounted(() => {
+  if (activityTimer) clearInterval(activityTimer)
+})
 </script>
 
 <template>
@@ -165,6 +256,10 @@ onMounted(fetchAuthState)
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><path d="M4 17h4V7H4v10Zm6 0h4V4h-4v13Zm6 0h4v-7h-4v7Z" /></svg>
               Activity
             </button>
+            <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'commands' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('commands')">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="h-4 w-4"><path d="m8 9 3 3-3 3M13 15h4M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /></svg>
+              Commands
+            </button>
           </nav>
 
           <div class="border-t border-white/[0.07] p-4 lg:p-5">
@@ -178,15 +273,23 @@ onMounted(fetchAuthState)
 
         <div class="min-w-0 flex-1 lg:ml-64">
           <div id="overview" class="w-full px-5 py-8 sm:px-8 lg:px-10 lg:py-10 xl:px-14">
-            <div class="mb-9">
-              <p class="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-600">Command center</p>
+             <div class="mb-9 flex items-start justify-between gap-6">
+               <div>
+               <p class="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-600">Command center</p>
               <h1 v-if="activeView === 'overview'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Good morning, {{ displayName }}.</h1>
               <h1 v-else-if="activeView === 'chats'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Your chats</h1>
-              <h1 v-else class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Recent activity</h1>
+               <h1 v-else-if="activeView === 'activity'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Recent activity</h1>
+               <h1 v-else class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Custom commands</h1>
               <p v-if="activeView === 'overview'" class="mt-3 max-w-xl text-zinc-500">Все важное о твоих чатах, командах и модерации в одном месте.</p>
               <p v-else-if="activeView === 'chats'" class="mt-3 max-w-xl text-zinc-500">Connected Telegram groups and their moderation status.</p>
-              <p v-else class="mt-3 max-w-xl text-zinc-500">A complete log of moderation actions in your workspace.</p>
-            </div>
+                <p v-else-if="activeView === 'activity'" class="mt-3 max-w-xl text-zinc-500">A complete log of moderation actions in your workspace.</p>
+                <p v-else class="mt-3 max-w-xl text-zinc-500">Команды, которые бот будет выполнять в твоих Telegram-группах.</p>
+               </div>
+               <button v-if="activeView === 'commands'" type="button" class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200" @click="commandError = null; commandModalOpen = true">
+                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>
+                 Add command
+               </button>
+             </div>
 
             <div v-if="activeView === 'overview'" class="space-y-6">
               <div class="grid gap-4 sm:grid-cols-3">
@@ -217,19 +320,53 @@ onMounted(fetchAuthState)
               <div v-if="!chats.length" class="rounded-2xl border border-dashed border-white/[0.1] p-8 text-sm text-zinc-600 md:col-span-2 xl:col-span-3">No tracked chats yet.</div>
             </div>
 
-            <div v-else class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
-              <div class="divide-y divide-white/[0.06]">
+              <div v-else-if="activeView === 'activity'" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
+               <div class="mb-4 flex items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
+                 <div class="flex items-center gap-2 text-xs text-zinc-600"><span class="h-2 w-2 rounded-full bg-emerald-400"></span><span>Updated {{ activityAge }}</span></div>
+                 <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-500 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" :disabled="refreshingActivity" @click="refreshActivity"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-4 w-4" :class="refreshingActivity ? 'animate-spin' : ''"><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4" /></svg>Refresh</button>
+               </div>
+               <div class="divide-y divide-white/[0.06]">
                 <div v-for="item in activity" :key="item.command + item.time" class="flex items-center gap-4 py-5 first:pt-0">
                   <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-xs text-zinc-500">↗</div>
                   <div class="min-w-0 flex-1"><p class="text-sm"><code :class="item.tone" class="font-mono text-xs">{{ item.command }}</code> <span class="text-zinc-500">by {{ item.user }}</span></p><p class="mt-1 truncate text-xs text-zinc-600">{{ item.chat }}</p></div>
                   <time class="shrink-0 text-xs text-zinc-600">{{ item.time }}</time>
                 </div>
                 <div v-if="!activity.length" class="py-8 text-sm text-zinc-600">No activity recorded yet.</div>
+               </div>
+             </div>
+
+              <div v-else class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
+                <div class="mb-2 flex items-center justify-between gap-4 text-xs text-zinc-600">
+                  <span>{{ commands.length }} command{{ commands.length === 1 ? '' : 's' }}</span>
+                  <span>Available to chat members</span>
+                </div>
+                <div class="divide-y divide-white/[0.06]">
+                  <article v-for="command in commands" :key="command.id" class="flex items-center gap-4 py-4 first:pt-3">
+                    <code class="w-36 shrink-0 truncate font-mono text-sm text-amber-200">{{ command.name }}</code>
+                    <p class="min-w-0 flex-1 truncate text-sm text-zinc-400">{{ command.response }}</p>
+                    <span class="hidden w-40 shrink-0 truncate text-xs text-zinc-600 sm:block">{{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span>
+                    <button type="button" class="shrink-0 text-xs text-zinc-600 transition hover:text-rose-300" @click="deleteCommand(command.id)">Delete</button>
+                  </article>
+                  <div v-if="!commands.length" class="py-12 text-center text-sm text-zinc-600">No custom commands yet.</div>
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
+           </div>
+         </div>
       </div>
     </template>
+
+    <div v-if="commandModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-5 py-8 backdrop-blur-sm" @click.self="commandModalOpen = false">
+      <form class="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-[#15181d] p-6 shadow-2xl" @submit.prevent="createCommand">
+        <div class="flex items-start justify-between gap-4">
+          <div><h2 class="text-lg font-semibold">Add command</h2><p class="mt-1 text-sm text-zinc-500">Ответ будет доступен всем участникам чата.</p></div>
+          <button type="button" class="text-zinc-600 hover:text-zinc-200" aria-label="Close" @click="commandModalOpen = false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+        </div>
+        <label class="mt-6 block text-xs text-zinc-500">Chat<select v-model="commandChatID" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-amber-300/50"><option v-for="chat in chats" :key="chat.chat_id" :value="chat.chat_id">{{ chat.name }}</option></select></label>
+        <label class="mt-4 block text-xs text-zinc-500">Command<input v-model="commandName" maxlength="32" placeholder="welcome" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-amber-300/50"></label>
+        <label class="mt-4 block text-xs text-zinc-500">Response<textarea v-model="commandResponse" maxlength="4096" rows="5" placeholder="Welcome to the group!" class="mt-2 w-full resize-none rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-amber-300/50"></textarea></label>
+        <p v-if="commandError" class="mt-3 text-xs text-rose-300">{{ commandError }}</p>
+        <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-xl px-4 py-2.5 text-sm text-zinc-500 hover:text-zinc-200" @click="commandModalOpen = false">Cancel</button><button :disabled="savingCommand || !commandChatID" type="submit" class="rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">{{ savingCommand ? 'Saving...' : 'Save command' }}</button></div>
+      </form>
+    </div>
   </main>
 </template>

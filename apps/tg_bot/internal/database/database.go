@@ -56,6 +56,14 @@ type DashboardData struct {
 	Activity        []DashboardActivity `json:"activity"`
 }
 
+type CustomCommand struct {
+	ID        int64  `json:"id"`
+	ChatID    int64  `json:"chat_id"`
+	Name      string `json:"name"`
+	Response  string `json:"response"`
+	CreatedAt string `json:"created_at"`
+}
+
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
 	// TrackChat records a chat where the bot received a trusted Telegram update.
@@ -75,6 +83,10 @@ type Store interface {
 	RevokeChatAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 	// DashboardData returns moderation metrics for the supplied chats.
 	DashboardData(ctx context.Context, chatIDs []int64) (DashboardData, error)
+	ListCustomCommands(ctx context.Context, chatIDs []int64) ([]CustomCommand, error)
+	CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, response string) (CustomCommand, error)
+	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (bool, error)
+	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
 	// Close releases database resources.
 	Close()
 }

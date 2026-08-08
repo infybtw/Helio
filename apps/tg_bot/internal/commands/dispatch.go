@@ -69,6 +69,36 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 			return
 		}
 		h(ctx, client, st, msg, log)
+		return
+	}
+
+	if msg.Chat == nil {
+		return
+	}
+	custom, ok, err := st.FindCustomCommand(ctx, msg.Chat.ID, command)
+	if err != nil {
+		log.Warn("failed to find custom command", "error", err, "chat_id", msg.Chat.ID, "command", command)
+		return
+	}
+	if ok {
+		action := database.ActionRecord{
+			ChatID:    msg.Chat.ID,
+			MessageID: msg.MessageID,
+			Action:    custom.Name,
+		}
+		if msg.From != nil {
+			action.ActorID = msg.From.ID
+			action.ActorUsername = msg.From.Username
+		}
+		if err := st.RecordAction(ctx, action); err != nil {
+			log.Warn("failed to record custom command activity", "error", err, "chat_id", msg.Chat.ID, "command", custom.Name)
+		} else {
+			log.Info("custom command activity recorded", "chat_id", msg.Chat.ID, "command", custom.Name, "user_id", action.ActorID)
+		}
+
+		if err := client.SendMessage(ctx, msg.Chat.ID, custom.Response, msg.MessageID); err != nil {
+			log.Warn("failed to send custom command response", "error", err, "chat_id", msg.Chat.ID, "command", command)
+		}
 	}
 }
 

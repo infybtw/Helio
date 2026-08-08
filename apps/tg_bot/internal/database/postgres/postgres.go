@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tg_bot/internal/database"
@@ -231,6 +232,76 @@ func (p *Postgres) DashboardData(ctx context.Context, chatIDs []int64) (database
 		return data, fmt.Errorf("iterate dashboard activity: %w", err)
 	}
 	return data, nil
+}
+
+func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]database.CustomCommand, error) {
+	commands := make([]database.CustomCommand, 0)
+	if len(chatIDs) == 0 {
+		return commands, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, chat_id, name, response, created_at
+		FROM custom_commands WHERE chat_id = ANY($1) ORDER BY name`, chatIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list custom commands: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var command database.CustomCommand
+		var createdAt time.Time
+		if err := rows.Scan(&command.ID, &command.ChatID, &command.Name, &command.Response, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan custom command: %w", err)
+		}
+		command.CreatedAt = createdAt.Format(time.RFC3339)
+		commands = append(commands, command)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate custom commands: %w", err)
+	}
+	return commands, nil
+}
+
+func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, response string) (database.CustomCommand, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	err := p.pool.QueryRow(ctx, `
+		INSERT INTO custom_commands (chat_id, name, response, created_by)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, chat_id, name, response, created_at`, chatID, name, response, createdBy).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Response, &createdAt)
+	if err != nil {
+		return command, fmt.Errorf("create custom command: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	return command, nil
+}
+
+func (p *Postgres) DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (bool, error) {
+	if len(chatIDs) == 0 {
+		return false, nil
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM custom_commands WHERE id = $1 AND chat_id = ANY($2)`, id, chatIDs)
+	if err != nil {
+		return false, fmt.Errorf("delete custom command: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (p *Postgres) FindCustomCommand(ctx context.Context, chatID int64, name string) (database.CustomCommand, bool, error) {
+	var command database.CustomCommand
+	var createdAt time.Time
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, chat_id, name, response, created_at
+		FROM custom_commands WHERE chat_id = $1 AND name = $2`, chatID, name).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Response, &createdAt)
+	if err == pgx.ErrNoRows {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, fmt.Errorf("find custom command: %w", err)
+	}
+	command.CreatedAt = createdAt.Format(time.RFC3339)
+	return command, true, nil
 }
 
 func initials(name string) string {

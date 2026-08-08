@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -190,19 +191,11 @@ func (a *Auth) Me(c *gin.Context) {
 
 // DashboardOverview returns moderation metrics for chats visible to the user.
 func (a *Auth) DashboardOverview(c *gin.Context) {
-	chatIDs, err := a.db.ListTrackedChatIDs(c.Request.Context())
+	ownedChatIDs, err := a.ownedChatIDs(c)
 	if err != nil {
 		a.log.Error("failed to list dashboard chats", "error", err)
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load dashboard data"})
 		return
-	}
-	session := SessionFromContext(c)
-	ownedChatIDs := make([]int64, 0, len(chatIDs))
-	for _, chatID := range chatIDs {
-		member, err := a.client.GetChatMember(c.Request.Context(), chatID, session.UserID)
-		if err == nil && member.Status == "creator" {
-			ownedChatIDs = append(ownedChatIDs, chatID)
-		}
 	}
 	data, err := a.db.DashboardData(c.Request.Context(), ownedChatIDs)
 	if err != nil {
@@ -219,6 +212,108 @@ func (a *Auth) DashboardOverview(c *gin.Context) {
 		data.Chats[i].Members = members
 	}
 	c.JSON(http.StatusOK, data)
+}
+
+func (a *Auth) ownedChatIDs(c *gin.Context) ([]int64, error) {
+	chatIDs, err := a.db.ListTrackedChatIDs(c.Request.Context())
+	if err != nil {
+		return nil, err
+	}
+	session := SessionFromContext(c)
+	owned := make([]int64, 0, len(chatIDs))
+	for _, chatID := range chatIDs {
+		member, err := a.client.GetChatMember(c.Request.Context(), chatID, session.UserID)
+		if err == nil && member.Status == "creator" {
+			owned = append(owned, chatID)
+		}
+	}
+	return owned, nil
+}
+
+func (a *Auth) ListCommands(c *gin.Context) {
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load commands"})
+		return
+	}
+	commands, err := a.db.ListCustomCommands(c.Request.Context(), chatIDs)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load commands"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"commands": commands})
+}
+
+type createCommandRequest struct {
+	ChatID   int64  `json:"chat_id"`
+	Name     string `json:"name"`
+	Response string `json:"response"`
+}
+
+func (a *Auth) CreateCommand(c *gin.Context) {
+	var request createCommandRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
+	request.Response = strings.TrimSpace(request.Response)
+	if request.ChatID == 0 || request.Name == "" || request.Response == "" || len(request.Name) > 32 || len(request.Response) > 4096 || strings.ContainsAny(request.Name, " !\t\r\n") {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and response are required; name must be one word"})
+		return
+	}
+	ownedChatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	if !containsChatID(ownedChatIDs, request.ChatID) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
+		return
+	}
+	session := SessionFromContext(c)
+	command, err := a.db.CreateCustomCommand(c.Request.Context(), request.ChatID, session.UserID, "!"+request.Name, request.Response)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to create command"})
+		return
+	}
+	c.JSON(http.StatusCreated, command)
+}
+
+func (a *Auth) DeleteCommand(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command id"})
+		return
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return
+	}
+	deleted, err := a.db.DeleteCustomCommand(c.Request.Context(), id, chatIDs)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to delete command"})
+		return
+	}
+	if !deleted {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "command not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func containsChatID(chatIDs []int64, wanted int64) bool {
+	for _, chatID := range chatIDs {
+		if chatID == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // RequireAuth is a Gin middleware that ensures a valid session exists.
