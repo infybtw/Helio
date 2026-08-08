@@ -83,6 +83,9 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 		return
 	}
 	if ok {
+		if msg.From == nil || !hasCustomCommandPermission(ctx, client, st, msg, custom.Permission, log) {
+			return
+		}
 		reply := msg.ReplyToMessage
 		action := database.ActionRecord{
 			ChatID:    msg.Chat.ID,
@@ -157,6 +160,23 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 				}
 			}
 		}
+	}
+}
+
+func hasCustomCommandPermission(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, permission string, log *slog.Logger) bool {
+	switch permission {
+	case "user":
+		return true
+	case "owner":
+		return isGroupOwner(ctx, client, msg, log)
+	case "moderator":
+		if isGroupOwner(ctx, client, msg, log) {
+			return true
+		}
+		return isChatAdmin(ctx, st, msg, log)
+	default:
+		log.Warn("ignoring custom command with invalid permission", "chat_id", msg.Chat.ID, "permission", permission)
+		return false
 	}
 }
 

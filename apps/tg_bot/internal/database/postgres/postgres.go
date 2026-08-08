@@ -258,7 +258,7 @@ func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]d
 		return commands, nil
 	}
 	rows, err := p.pool.Query(ctx, `
-		SELECT id, chat_id, name, enabled, created_at
+		SELECT id, chat_id, name, enabled, permission, created_at
 		FROM custom_commands WHERE chat_id = ANY($1) ORDER BY name`, chatIDs)
 	if err != nil {
 		return nil, fmt.Errorf("list custom commands: %w", err)
@@ -267,7 +267,7 @@ func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]d
 	for rows.Next() {
 		var command database.CustomCommand
 		var createdAt time.Time
-		if err := rows.Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &createdAt); err != nil {
+		if err := rows.Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan custom command: %w", err)
 		}
 		command.CreatedAt = createdAt.Format(time.RFC3339)
@@ -283,7 +283,7 @@ func (p *Postgres) ListCustomCommands(ctx context.Context, chatIDs []int64) ([]d
 	return commands, nil
 }
 
-func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name string, actions []database.CustomCommandAction) (database.CustomCommand, error) {
+func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy int64, name, permission string, actions []database.CustomCommandAction) (database.CustomCommand, error) {
 	var command database.CustomCommand
 	var createdAt time.Time
 	tx, err := p.pool.Begin(ctx)
@@ -292,10 +292,10 @@ func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy in
 	}
 	defer tx.Rollback(ctx)
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO custom_commands (chat_id, name, response, created_by)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, chat_id, name, enabled, created_at`, chatID, name, actions[0].Payload, createdBy).
-		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &createdAt); err != nil {
+		INSERT INTO custom_commands (chat_id, name, response, created_by, permission)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, chat_id, name, enabled, permission, created_at`, chatID, name, actions[0].Payload, createdBy, permission).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt); err != nil {
 		return command, fmt.Errorf("create custom command: %w", err)
 	}
 	if err := insertCustomCommandActions(ctx, tx, command.ID, actions); err != nil {
@@ -309,7 +309,7 @@ func (p *Postgres) CreateCustomCommand(ctx context.Context, chatID, createdBy in
 	return command, nil
 }
 
-func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name string, actions []database.CustomCommandAction) (database.CustomCommand, bool, error) {
+func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, chatIDs []int64, name, permission string, actions []database.CustomCommandAction) (database.CustomCommand, bool, error) {
 	var command database.CustomCommand
 	var createdAt time.Time
 	if len(chatIDs) == 0 {
@@ -321,10 +321,10 @@ func (p *Postgres) UpdateCustomCommand(ctx context.Context, id, chatID int64, ch
 	}
 	defer tx.Rollback(ctx)
 	err = tx.QueryRow(ctx, `
-		UPDATE custom_commands SET chat_id = $2, name = $3, response = $4
-		WHERE id = $1 AND chat_id = ANY($5)
-		RETURNING id, chat_id, name, enabled, created_at`, id, chatID, name, actions[0].Payload, chatIDs).
-		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &createdAt)
+		UPDATE custom_commands SET chat_id = $2, name = $3, response = $4, permission = $5
+		WHERE id = $1 AND chat_id = ANY($6)
+		RETURNING id, chat_id, name, enabled, permission, created_at`, id, chatID, name, actions[0].Payload, permission, chatIDs).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
 	if err == pgx.ErrNoRows {
 		return command, false, nil
 	}
@@ -353,8 +353,8 @@ func (p *Postgres) DeleteCustomCommand(ctx context.Context, id int64, chatIDs []
 	}
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM custom_commands WHERE id = $1 AND chat_id = ANY($2)
-		RETURNING id, chat_id, name, enabled, created_at`, id, chatIDs).
-		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &createdAt)
+		RETURNING id, chat_id, name, enabled, permission, created_at`, id, chatIDs).
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
 	if err == pgx.ErrNoRows {
 		return command, false, nil
 	}
@@ -380,9 +380,9 @@ func (p *Postgres) FindCustomCommand(ctx context.Context, chatID int64, name str
 	var command database.CustomCommand
 	var createdAt time.Time
 	err := p.pool.QueryRow(ctx, `
-		SELECT id, chat_id, name, enabled, created_at
+		SELECT id, chat_id, name, enabled, permission, created_at
 		FROM custom_commands WHERE chat_id = $1 AND name = $2 AND enabled = TRUE`, chatID, name).
-		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &createdAt)
+		Scan(&command.ID, &command.ChatID, &command.Name, &command.Enabled, &command.Permission, &createdAt)
 	if err == pgx.ErrNoRows {
 		return command, false, nil
 	}

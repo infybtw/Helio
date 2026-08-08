@@ -269,9 +269,10 @@ func (a *Auth) ListCommands(c *gin.Context) {
 }
 
 type createCommandRequest struct {
-	ChatID  int64                          `json:"chat_id"`
-	Name    string                         `json:"name"`
-	Actions []database.CustomCommandAction `json:"actions"`
+	ChatID     int64                          `json:"chat_id"`
+	Name       string                         `json:"name"`
+	Permission string                         `json:"permission"`
+	Actions    []database.CustomCommandAction `json:"actions"`
 }
 
 func (a *Auth) CreateCommand(c *gin.Context) {
@@ -281,6 +282,7 @@ func (a *Auth) CreateCommand(c *gin.Context) {
 		return
 	}
 	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
+	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
 	if !validCommandRequest(request) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
 		return
@@ -295,7 +297,7 @@ func (a *Auth) CreateCommand(c *gin.Context) {
 		return
 	}
 	session := SessionFromContext(c)
-	command, err := a.db.CreateCustomCommand(c.Request.Context(), request.ChatID, session.UserID, "!"+request.Name, request.Actions)
+	command, err := a.db.CreateCustomCommand(c.Request.Context(), request.ChatID, session.UserID, "!"+request.Name, request.Permission, request.Actions)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
@@ -320,6 +322,7 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 		return
 	}
 	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
+	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
 	if !validCommandRequest(request) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
 		return
@@ -333,7 +336,7 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
 		return
 	}
-	command, updated, err := a.db.UpdateCustomCommand(c.Request.Context(), id, request.ChatID, chatIDs, "!"+request.Name, request.Actions)
+	command, updated, err := a.db.UpdateCustomCommand(c.Request.Context(), id, request.ChatID, chatIDs, "!"+request.Name, request.Permission, request.Actions)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "command already exists in this chat"})
@@ -351,7 +354,7 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 }
 
 func validCommandRequest(request createCommandRequest) bool {
-	if request.ChatID == 0 || request.Name == "" || len(request.Name) > 32 || len(request.Actions) == 0 || strings.ContainsAny(request.Name, " !\t\r\n") {
+	if request.ChatID == 0 || request.Name == "" || len(request.Name) > 32 || len(request.Actions) == 0 || (request.Permission != "user" && request.Permission != "moderator" && request.Permission != "owner") || strings.ContainsAny(request.Name, " !\t\r\n") {
 		return false
 	}
 	for i := range request.Actions {

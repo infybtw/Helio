@@ -32,6 +32,7 @@ interface CustomCommand {
   name: string
   actions: CustomCommandAction[]
   enabled: boolean
+  permission: 'user' | 'moderator' | 'owner'
   created_at: string
 }
 interface CustomCommandAction {
@@ -73,6 +74,7 @@ const initialView: DashboardView = route.query.view === 'chats' || route.query.v
 const activeView = ref<DashboardView>(initialView)
 const commands = ref<CustomCommand[]>([])
 const commandName = ref('')
+const commandPermission = ref<CustomCommand['permission']>('user')
 const commandActions = ref<CustomCommandAction[]>([{ type: 'send_message', payload: '' }])
 const commandChatID = ref<number | null>(null)
 const commandError = ref<string | null>(null)
@@ -229,7 +231,7 @@ async function createCommand() {
     const isEditing = editingCommandID.value !== null
     const command = await $fetch<CustomCommand>(`${baseURL}/api/dashboard/commands${isEditing ? `/${editingCommandID.value}` : ''}`, {
       method: isEditing ? 'PUT' : 'POST', credentials: 'include',
-      body: { chat_id: commandChatID.value, name: commandName.value, actions: commandActions.value }
+      body: { chat_id: commandChatID.value, name: commandName.value, permission: commandPermission.value, actions: commandActions.value }
     })
     if (isEditing) {
       commands.value = commands.value.map((item) => item.id === command.id ? command : item)
@@ -277,6 +279,7 @@ async function toggleCommand(command: CustomCommand) {
 function openCreateCommand() {
   editingCommandID.value = null
   commandName.value = ''
+  commandPermission.value = 'user'
   commandActions.value = [{ type: 'send_message', payload: '' }]
   commandError.value = null
   commandModalOpen.value = true
@@ -286,6 +289,7 @@ function openEditCommand(command: CustomCommand) {
   editingCommandID.value = command.id
   commandChatID.value = command.chat_id
   commandName.value = command.name.replace(/^!/, '')
+  commandPermission.value = command.permission
   commandActions.value = command.actions.map((action) => ({ ...action }))
   commandError.value = null
   commandModalOpen.value = true
@@ -484,7 +488,7 @@ onUnmounted(() => {
                 <p v-if="commandListError" class="mb-3 text-xs text-rose-300">{{ commandListError }}</p>
                 <div class="divide-y divide-white/[0.06]">
                   <article v-for="command in commands" :key="command.id" class="flex min-w-0 items-center gap-3 py-4 first:pt-3">
-                    <div class="min-w-0 flex-1"><div class="flex min-w-0 items-center gap-3"><code class="shrink-0 truncate font-mono text-sm" :class="command.enabled ? 'text-amber-200' : 'text-zinc-600 line-through'">{{ command.name }}</code><p class="min-w-0 truncate text-sm text-zinc-400">{{ command.actions.length === 1 ? `Send message: ${command.actions[0]?.payload || ''}` : `${command.actions.length} actions` }}</p></div><span class="mt-1 block truncate text-xs text-zinc-600 sm:hidden">{{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span></div>
+                    <div class="min-w-0 flex-1"><div class="flex min-w-0 items-center gap-3"><code class="shrink-0 truncate font-mono text-sm" :class="command.enabled ? 'text-amber-200' : 'text-zinc-600 line-through'">{{ command.name }}</code><p class="min-w-0 truncate text-sm text-zinc-400">{{ command.actions.length === 1 ? `Send message: ${command.actions[0]?.payload || ''}` : `${command.actions.length} actions` }}</p></div><span class="mt-1 block truncate text-xs text-zinc-600 sm:hidden">{{ command.permission }} · {{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span></div>
                     <span class="hidden w-40 shrink-0 truncate text-xs text-zinc-600 sm:block">{{ chats.find((chat) => chat.chat_id === command.chat_id)?.name || 'Unknown chat' }}</span>
                     <div class="flex shrink-0 items-center gap-3"><button type="button" role="switch" :aria-checked="command.enabled" class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-300/40" :class="command.enabled ? 'bg-emerald-400/80' : 'bg-zinc-700'" @click="toggleCommand(command)"><span class="block h-4 w-4 rounded-full bg-white shadow-sm transition-transform" :class="command.enabled ? 'translate-x-5' : 'translate-x-0'"></span></button><button type="button" class="text-xs text-zinc-600 transition hover:text-amber-200" @click="openEditCommand(command)">Edit</button><button type="button" class="text-xs text-zinc-600 transition hover:text-rose-300" @click="deleteCommand(command.id)">Delete</button></div>
                   </article>
@@ -503,7 +507,8 @@ onUnmounted(() => {
           <button type="button" class="text-zinc-600 hover:text-zinc-200" aria-label="Close" @click="commandModalOpen = false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
         </div>
         <label class="mt-6 block text-xs text-zinc-500">Chat<select v-model="commandChatID" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-amber-300/50"><option v-for="chat in chats" :key="chat.chat_id" :value="chat.chat_id">{{ chat.name }}</option></select></label>
-        <label class="mt-4 block text-xs text-zinc-500">Command<div class="mt-2 flex overflow-hidden rounded-xl border border-white/[0.1] bg-[#111418] focus-within:border-amber-300/50"><span class="border-r border-white/[0.08] px-3 py-3 font-mono text-sm text-amber-200">!</span><input v-model="commandName" maxlength="32" placeholder="welcome" class="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></div></label>
+         <label class="mt-4 block text-xs text-zinc-500">Command<div class="mt-2 flex overflow-hidden rounded-xl border border-white/[0.1] bg-[#111418] focus-within:border-amber-300/50"><span class="border-r border-white/[0.08] px-3 py-3 font-mono text-sm text-amber-200">!</span><input v-model="commandName" maxlength="32" placeholder="welcome" class="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></div></label>
+         <label class="mt-4 block text-xs text-zinc-500">Who can use it<select v-model="commandPermission" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-amber-300/50"><option value="user">User — everyone</option><option value="moderator">Moderator — owner and granted moderators</option><option value="owner">Owner — chat owner only</option></select></label>
         <div class="mt-6 flex items-center justify-between gap-4"><span class="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">Actions</span><button type="button" class="inline-flex items-center gap-2 rounded-lg border border-amber-300/20 bg-amber-300/10 px-2.5 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-300/20" @click="variablesModalOpen = true">? Переменные</button></div>
         <div class="mt-3 space-y-3"><div v-for="(action, index) in commandActions" :key="index" draggable="true" class="rounded-xl border border-white/[0.08] bg-[#111418] transition" :class="draggedActionIndex === index ? 'opacity-40' : ''" @dragstart="draggedActionIndex = index" @dragend="draggedActionIndex = null" @dragover.prevent="dragOverCommandAction(index)" @drop.prevent="dropCommandAction(index)"><div class="p-3"><div class="mb-2 flex items-center justify-between gap-3"><div class="flex min-w-0 items-center gap-2"><span class="cursor-grab text-zinc-600 active:cursor-grabbing" title="Drag to reorder">⠿</span><select v-model="action.type" class="min-w-0 rounded-lg border border-white/[0.08] bg-[#15181d] px-2 py-1.5 text-xs text-zinc-300 outline-none" @change="normalizeAction(action)"><option value="send_message">Send message</option><option value="reply_message">Reply to message</option><option value="mute">Mute reply author</option><option value="delete_message">Delete reply</option></select></div><button v-if="commandActions.length > 1" type="button" class="text-xs text-zinc-600 hover:text-rose-300" @click="removeCommandAction(index)">Remove</button></div><textarea v-if="action.type === 'send_message' || action.type === 'reply_message'" v-model="action.payload" maxlength="4096" rows="4" :placeholder="action.type === 'reply_message' ? 'Reply text' : 'Message text'" class="w-full resize-none bg-transparent text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></textarea><label v-else-if="action.type === 'mute'" class="block text-xs text-zinc-600">Duration<input v-model="action.payload" placeholder="30m" class="mt-2 w-full rounded-lg border border-white/[0.08] bg-transparent px-3 py-2 text-sm text-zinc-200 outline-none placeholder:text-zinc-700"></label><p v-else class="text-sm text-zinc-500">Deletes the message this command replies to.</p></div></div><button type="button" class="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-amber-200 transition hover:bg-amber-300/10" @click="addCommandAction"><span class="text-base leading-none">+</span>Add action</button></div>
         <p v-if="commandError" class="mt-3 text-xs text-rose-300">{{ commandError }}</p>
