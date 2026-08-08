@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,11 +109,11 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 		for _, action := range custom.Actions {
 			switch action.Type {
 			case "send_message":
-				if err := client.SendMessage(ctx, msg.Chat.ID, action.Payload, 0); err != nil {
+				if err := client.SendMessage(ctx, msg.Chat.ID, interpolateVariables(action.Payload, msg), 0); err != nil {
 					log.Warn("failed to execute custom command action", "error", err, "chat_id", msg.Chat.ID, "command", command, "action_type", action.Type)
 				}
 			case "reply_message":
-				if err := client.SendMessage(ctx, msg.Chat.ID, action.Payload, msg.MessageID); err != nil {
+				if err := client.SendMessage(ctx, msg.Chat.ID, interpolateVariables(action.Payload, msg), msg.MessageID); err != nil {
 					log.Warn("failed to execute custom reply action", "error", err, "chat_id", msg.Chat.ID, "command", command, "target_message_id", msg.MessageID)
 				}
 			case "mute":
@@ -157,6 +158,27 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 			}
 		}
 	}
+}
+
+func interpolateVariables(text string, msg *telegram.Message) string {
+	username, firstName, userID := "", "", ""
+	replyUsername, replyFirstName := "", ""
+	if msg != nil && msg.From != nil {
+		username = msg.From.Username
+		firstName = msg.From.FirstName
+		userID = strconv.FormatInt(msg.From.ID, 10)
+	}
+	if msg != nil && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+		replyUsername = msg.ReplyToMessage.From.Username
+		replyFirstName = msg.ReplyToMessage.From.FirstName
+	}
+	return strings.NewReplacer(
+		"{{username}}", username,
+		"{{firstname}}", firstName,
+		"{{user_id}}", userID,
+		"{{reply_username}}", replyUsername,
+		"{{reply_firstname}}", replyFirstName,
+	).Replace(text)
 }
 
 func logUnauthorized(log *slog.Logger, command string, msg *telegram.Message) {
