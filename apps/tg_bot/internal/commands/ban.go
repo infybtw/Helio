@@ -12,7 +12,7 @@ import (
 // Ban handles the !ban command.
 // It bans the author of the replied-to message from the chat, deletes the
 // replied-to message, then deletes the command message itself.
-func Ban(ctx context.Context, client *telegram.Client, _ database.Store, msg *telegram.Message, log *slog.Logger) {
+func Ban(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, log *slog.Logger) {
 	if msg == nil || msg.Chat == nil {
 		log.Warn("ban called with nil message or chat")
 		return
@@ -71,6 +71,8 @@ func Ban(ctx context.Context, client *telegram.Client, _ database.Store, msg *te
 			"message_id", msg.ReplyToMessage.MessageID,
 			"error", err,
 		)
+	} else if err := recordAction(ctx, st, msg, "!ban", msg.ReplyToMessage); err != nil {
+		log.Error("failed to record ban action", "error", err, "chat_id", chatID, "message_id", msg.ReplyToMessage.MessageID)
 	}
 
 	if err := client.DeleteMessage(ctx, chatID, msg.MessageID); err != nil {

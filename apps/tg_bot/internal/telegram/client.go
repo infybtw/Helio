@@ -129,10 +129,10 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) err
 
 // RestrictChatMemberParams contains parameters for the restrictChatMember method.
 type RestrictChatMemberParams struct {
-	ChatID      int64            `json:"chat_id"`
-	UserID      int64            `json:"user_id"`
-	Permissions ChatPermissions  `json:"permissions"`
-	UntilDate   int64            `json:"until_date,omitempty"`
+	ChatID      int64           `json:"chat_id"`
+	UserID      int64           `json:"user_id"`
+	Permissions ChatPermissions `json:"permissions"`
+	UntilDate   int64           `json:"until_date,omitempty"`
 }
 
 // ChatPermissions describes actions that a non-administrator user is allowed to take in a chat.
@@ -195,6 +195,17 @@ func (c *Client) GetChatMember(ctx context.Context, chatID, userID int64) (*Chat
 		return nil, err
 	}
 	return &member, nil
+}
+
+// GetChatMemberCount returns the current number of members in a chat.
+func (c *Client) GetChatMemberCount(ctx context.Context, chatID int64) (int64, error) {
+	var count int64
+	if err := c.call(ctx, "getChatMemberCount", struct {
+		ChatID int64 `json:"chat_id"`
+	}{ChatID: chatID}, &count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // GetMe returns information about the bot itself.

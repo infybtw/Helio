@@ -4,8 +4,12 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"tg_bot/internal/database"
 )
 
 // Postgres is a PostgreSQL-backed database.Store.
@@ -47,6 +51,41 @@ func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title,
 	)
 	if err != nil {
 		return fmt.Errorf("track chat: %w", err)
+	}
+	return nil
+}
+
+// RecordMessage stores an incoming Telegram message, updating it when Telegram
+// sends the same message again as an edit.
+func (p *Postgres) RecordMessage(ctx context.Context, message database.MessageRecord) error {
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO message_logs
+		 (chat_id, message_id, chat_type, chat_title, chat_username, sender_id, sender_username, message_text, sent_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
+		 ON CONFLICT (chat_id, message_id) DO UPDATE SET
+		   message_text = EXCLUDED.message_text,
+		   sender_id = EXCLUDED.sender_id,
+		   sender_username = EXCLUDED.sender_username`,
+		message.ChatID, message.MessageID, message.ChatType, message.ChatTitle, message.ChatUsername,
+		message.SenderID, message.SenderUsername, message.Text, message.SentAt,
+	)
+	if err != nil {
+		return fmt.Errorf("record message: %w", err)
+	}
+	return nil
+}
+
+// RecordAction stores a successful bot action and its target message.
+func (p *Postgres) RecordAction(ctx context.Context, action database.ActionRecord) error {
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO action_logs
+		 (chat_id, message_id, actor_id, actor_username, action, target_message_id, target_user_id, target_username)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		action.ChatID, action.MessageID, action.ActorID, action.ActorUsername, action.Action,
+		action.TargetMessageID, action.TargetUserID, action.TargetUsername,
+	)
+	if err != nil {
+		return fmt.Errorf("record action: %w", err)
 	}
 	return nil
 }
@@ -111,4 +150,97 @@ func (p *Postgres) RevokeChatAdmin(ctx context.Context, chatID, userID int64) (b
 		return false, fmt.Errorf("revoke chat admin: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// DashboardData returns chat metrics and recent actions for tracked chats.
+func (p *Postgres) DashboardData(ctx context.Context, chatIDs []int64) (database.DashboardData, error) {
+	data := database.DashboardData{Chats: []database.DashboardChat{}, Activity: []database.DashboardActivity{}}
+	if len(chatIDs) == 0 {
+		return data, nil
+	}
+
+	data.ProtectedChats = int64(len(chatIDs))
+	if err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM action_logs WHERE chat_id = ANY($1) AND created_at >= now() - interval '7 days'`, chatIDs,
+	).Scan(&data.ActionsThisWeek); err != nil {
+		return data, fmt.Errorf("count dashboard actions: %w", err)
+	}
+	if err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM action_logs WHERE chat_id = ANY($1) AND action IN ('!delete', '!mute', '!ban')`, chatIDs,
+	).Scan(&data.MessagesCleaned); err != nil {
+		return data, fmt.Errorf("count cleaned messages: %w", err)
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT t.chat_id, t.title, t.username,
+		       count(DISTINCT m.sender_id) FILTER (WHERE m.sender_id <> 0),
+		       count(DISTINCT a.id) FILTER (WHERE a.created_at >= now() - interval '7 days')
+		FROM tracked_chats t
+		LEFT JOIN message_logs m ON m.chat_id = t.chat_id
+		LEFT JOIN action_logs a ON a.chat_id = t.chat_id
+		WHERE t.chat_id = ANY($1)
+		GROUP BY t.chat_id, t.title, t.username
+		ORDER BY max(t.last_seen_at) DESC`, chatIDs)
+	if err != nil {
+		return data, fmt.Errorf("list dashboard chats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var chat database.DashboardChat
+		var title, username string
+		if err := rows.Scan(&chat.ChatID, &title, &username, &chat.Participants, &chat.Actions); err != nil {
+			return data, fmt.Errorf("scan dashboard chat: %w", err)
+		}
+		chat.Name = title
+		if chat.Name == "" {
+			chat.Name = "Untitled chat"
+		}
+		chat.Handle = ""
+		if username != "" {
+			chat.Handle = "@" + strings.TrimPrefix(username, "@")
+		}
+		chat.Status = "Healthy"
+		chat.Initials = initials(chat.Name)
+		data.Chats = append(data.Chats, chat)
+	}
+	if err := rows.Err(); err != nil {
+		return data, fmt.Errorf("iterate dashboard chats: %w", err)
+	}
+
+	activityRows, err := p.pool.Query(ctx, `
+		SELECT a.action, a.actor_username, COALESCE(NULLIF(t.title, ''), t.username, 'Unknown chat'),
+		       a.target_message_id, a.created_at
+		FROM action_logs a
+		JOIN tracked_chats t ON t.chat_id = a.chat_id
+		WHERE a.chat_id = ANY($1)
+		ORDER BY a.created_at DESC LIMIT 20`, chatIDs)
+	if err != nil {
+		return data, fmt.Errorf("list dashboard activity: %w", err)
+	}
+	defer activityRows.Close()
+	for activityRows.Next() {
+		var item database.DashboardActivity
+		var createdAt time.Time
+		if err := activityRows.Scan(&item.Action, &item.Actor, &item.Chat, &item.TargetMessageID, &createdAt); err != nil {
+			return data, fmt.Errorf("scan dashboard activity: %w", err)
+		}
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		data.Activity = append(data.Activity, item)
+	}
+	if err := activityRows.Err(); err != nil {
+		return data, fmt.Errorf("iterate dashboard activity: %w", err)
+	}
+	return data, nil
+}
+
+func initials(name string) string {
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return "??"
+	}
+	result := parts[0][:1]
+	if len(parts) > 1 {
+		result += parts[1][:1]
+	}
+	return strings.ToUpper(result)
 }
