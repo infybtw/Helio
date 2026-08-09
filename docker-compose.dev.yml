@@ -17,10 +17,12 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot?sslmode=disable
-      STT_URL: http://voice_recognizer:8000/stt
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
     depends_on:
       migrations:
         condition: service_completed_successfully
+      nats:
+        condition: service_started
     restart: unless-stopped
 
   voice_recognizer:
@@ -34,8 +36,21 @@ services:
       WHISPER_COMPUTE_TYPE: int8
       WHISPER_CPU_THREADS: 4
       STT_MAX_UPLOAD_BYTES: 26214400
+      NATS_URL: nats//nats:4222
     volumes:
       - whisper_models:/root/.cache/huggingface
+    depends_on:
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "4222:4222"
+    volumes:
+      - nats_data:/data
     restart: unless-stopped
 
   migrations:
@@ -68,3 +83,4 @@ services:
 volumes:
   postgres_data:
   whisper_models:
+  nats_data:

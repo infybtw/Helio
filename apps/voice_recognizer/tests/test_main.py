@@ -26,7 +26,7 @@ class FakeModel:
 
 def create_test_client(max_upload_bytes: int = 1024) -> TestClient:
     app = create_app(
-        Settings(max_upload_bytes=max_upload_bytes),
+        Settings(max_upload_bytes=max_upload_bytes, nats_url=""),
         model_loader=lambda _settings: FakeModel(),
     )
     return TestClient(app)

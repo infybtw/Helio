@@ -15,8 +15,8 @@ import (
 	"tg_bot/internal/handlers"
 	"tg_bot/internal/httpserver"
 	"tg_bot/internal/logger"
-	"tg_bot/internal/stt"
 	"tg_bot/internal/telegram"
+	"tg_bot/internal/voicequeue"
 )
 
 func main() {
@@ -39,7 +39,12 @@ func main() {
 	}
 
 	client := telegram.NewClient(cfg.BotToken)
-	sttClient := stt.NewClient(cfg.STTURL)
+	voices, err := voicequeue.NewClient(cfg.NATSURL)
+	if err != nil {
+		logger.Error("failed to connect to NATS", "error", err)
+		os.Exit(1)
+	}
+	defer voices.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -78,7 +83,21 @@ func main() {
 	stateMgr := auth.NewOIDCStateManager(cfg.SessionSecret, 600, true, "none", cfg.CookieDomain)
 	oidcClient := auth.NewOIDCClient(cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURI, cfg.OIDCScopes)
 	authHandler := handlers.NewAuth(oidcClient, stateMgr, sessions, db, client, cfg.DashboardOrigin, cfg.DashboardURL, logger)
-	webhook := handlers.NewWebhook(client, sttClient, db, cfg.WebhookSecret, logger)
+	if _, err := voices.SubscribeResults(func(result voicequeue.Result) error {
+		if result.Text == "" {
+			return nil
+		}
+		if err := client.SendMessage(ctx, result.ChatID, result.Text, result.MessageID); err != nil {
+			logger.Error("failed to send voice transcription", "error", err, "job_id", result.JobID)
+			return err
+		}
+		logger.Info("sent voice transcription", "job_id", result.JobID, "language", result.Language)
+		return nil
+	}); err != nil {
+		logger.Error("failed to subscribe to transcription results", "error", err)
+		os.Exit(1)
+	}
+	webhook := handlers.NewWebhook(client, voices, db, cfg.WebhookSecret, logger)
 	server := httpserver.New(
 		":"+cfg.Port,
 		cfg.WebhookPath,

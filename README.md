@@ -83,10 +83,11 @@ audio `duration`, and timestamped `segments`. Configure `WHISPER_MODEL`,
 to that many CPU threads per transcription; use `0` for its default.
 
 The Telegram bot transcribes new voice messages in groups and supergroups,
-then replies to the source message with the recognized text. In Docker Compose
-it uses `http://voice_recognizer:8000/stt`; set `STT_URL` to
-`http://localhost:8000/stt` when running the bot locally. Disable the bot's
-privacy mode in BotFather so it receives ordinary group voice messages.
+then replies to the source message with the recognized text. It stores each OGG
+in JetStream Object Store, publishes a durable `stt.jobs` task, and receives the
+result through the durable `stt.results` consumer. Docker Compose runs NATS with
+JetStream enabled; use `NATS_URL=nats://localhost:4222` outside Compose. Disable
+the bot's privacy mode in BotFather so it receives ordinary group voice messages.
 
 ## Run locally
 

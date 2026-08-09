@@ -30,6 +30,7 @@ class Settings(BaseModel):
     compute_type: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
     cpu_threads: int = int(os.getenv("WHISPER_CPU_THREADS", "4"))
     max_upload_bytes: int = int(os.getenv("STT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+    nats_url: str = os.getenv("NATS_URL", "nats://nats:4222")
 
 
 class Segment(BaseModel):
@@ -112,8 +113,20 @@ def create_app(
             logger.exception("failed to load whisper model")
             raise
         app.state.transcription_lock = asyncio.Lock()
+        if service_settings.nats_url:
+            from app.worker import start_worker
+
+            app.state.nats_connection, app.state.nats_worker = await start_worker(
+                service_settings.nats_url,
+                app.state.model,
+                app.state.transcription_lock,
+            )
         logger.info("whisper model loaded elapsed_seconds=%.3f", time.perf_counter() - started_at)
         yield
+        if hasattr(app.state, "nats_connection"):
+            from app.worker import stop_worker
+
+            await stop_worker(app.state.nats_connection, app.state.nats_worker)
         logger.info("voice recognizer stopped")
 
     app = FastAPI(title="Helio Voice Recognizer", lifespan=lifespan)

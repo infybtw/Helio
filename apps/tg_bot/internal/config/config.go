@@ -17,7 +17,7 @@ type Config struct {
 	WebhookPath      string
 	Port             string
 	DatabaseURL      string
-	STTURL           string
+	NATSURL          string
 	AllowedUpdates   []string
 	SessionSecret    string
 	DashboardOrigin  string
@@ -41,9 +41,9 @@ func Load() (*Config, error) {
 	if port == "" {
 		port = "8080"
 	}
-	sttURL := os.Getenv("STT_URL")
-	if sttURL == "" {
-		sttURL = "http://localhost:8000/stt"
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
 	}
 
 	webhookPath := os.Getenv("WEBHOOK_PATH")
@@ -77,7 +77,7 @@ func Load() (*Config, error) {
 		WebhookPath:      webhookPath,
 		Port:             port,
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		STTURL:           sttURL,
+		NATSURL:          natsURL,
 		AllowedUpdates:   allowed,
 		SessionSecret:    os.Getenv("SESSION_SECRET"),
 		DashboardOrigin:  os.Getenv("DASHBOARD_ORIGIN"),

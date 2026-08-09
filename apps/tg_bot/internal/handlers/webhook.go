@@ -5,14 +5,13 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"tg_bot/internal/commands"
 	"tg_bot/internal/database"
-	"tg_bot/internal/stt"
 	"tg_bot/internal/telegram"
+	"tg_bot/internal/voicequeue"
 )
 
 const secretTokenHeader = "X-Telegram-Bot-Api-Secret-Token"
@@ -20,17 +19,17 @@ const secretTokenHeader = "X-Telegram-Bot-Api-Secret-Token"
 // Webhook processes incoming Telegram webhook updates.
 type Webhook struct {
 	client *telegram.Client
-	stt    *stt.Client
+	voices *voicequeue.Client
 	db     database.Store
 	secret string
 	log    *slog.Logger
 }
 
 // NewWebhook creates a new webhook handler.
-func NewWebhook(client *telegram.Client, sttClient *stt.Client, st database.Store, secret string, log *slog.Logger) *Webhook {
+func NewWebhook(client *telegram.Client, voices *voicequeue.Client, st database.Store, secret string, log *slog.Logger) *Webhook {
 	return &Webhook{
 		client: client,
-		stt:    sttClient,
+		voices: voices,
 		db:     st,
 		secret: secret,
 		log:    log,
@@ -126,17 +125,12 @@ func (w *Webhook) transcribeVoice(ctx context.Context, msg *telegram.Message) {
 	}
 	defer audio.Close()
 
-	text, err := w.stt.Transcribe(ctx, audio, "voice.ogg")
+	jobID, err := w.voices.Enqueue(ctx, audio, msg.Chat.ID, msg.MessageID)
 	if err != nil {
-		w.log.Error("failed to transcribe voice message", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+		w.log.Error("failed to enqueue voice message", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
 		return
 	}
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	if err := w.client.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID); err != nil {
-		w.log.Error("failed to send voice transcription", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
-	}
+	w.log.Info("voice message enqueued", "job_id", jobID, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
 }
 
 func messageRecord(msg *telegram.Message) database.MessageRecord {
