@@ -128,7 +128,7 @@ Prerequisites: Go, Bun, Docker (for Postgres), and a public HTTPS tunnel. Telegr
    ```sh
    cd apps/web
    bun install
-   NUXT_PUBLIC_API_BASE_URL=yourdomain.com bun run dev
+    NUXT_PUBLIC_API_BASE_URL=https://yourdomain.com bun run dev
    ```
 
    Open [http://localhost:3000](http://localhost:3000). The dashboard connects to `https://rp1.infybtw.dev` in this local setup.

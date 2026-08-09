@@ -117,6 +117,14 @@ func (w *Webhook) transcribeVoice(ctx context.Context, msg *telegram.Message) {
 	if msg.Voice == nil || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
 		return
 	}
+	settings, err := w.db.GetVoiceRecognitionSettings(ctx, msg.Chat.ID)
+	if err != nil {
+		w.log.Error("failed to load voice recognition settings", "error", err, "chat_id", msg.Chat.ID)
+		return
+	}
+	if !settings.Enabled || msg.Voice.Duration > settings.MaxDurationSeconds || !w.canTranscribeVoice(ctx, msg, settings.Permission) {
+		return
+	}
 
 	audio, err := w.client.DownloadFile(ctx, msg.Voice.FileID)
 	if err != nil {
@@ -131,6 +139,25 @@ func (w *Webhook) transcribeVoice(ctx context.Context, msg *telegram.Message) {
 		return
 	}
 	w.log.Info("voice message enqueued", "job_id", jobID, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+}
+
+func (w *Webhook) canTranscribeVoice(ctx context.Context, msg *telegram.Message, permission string) bool {
+	if permission == "user" {
+		return true
+	}
+	if permission != "moderator" || msg.From == nil {
+		return false
+	}
+	member, err := w.client.GetChatMember(ctx, msg.Chat.ID, msg.From.ID)
+	if err == nil && member.Status == "creator" {
+		return true
+	}
+	granted, err := w.db.IsChatAdmin(ctx, msg.Chat.ID, msg.From.ID)
+	if err != nil {
+		w.log.Warn("failed to check voice recognition access", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
+		return false
+	}
+	return granted
 }
 
 func messageRecord(msg *telegram.Message) database.MessageRecord {

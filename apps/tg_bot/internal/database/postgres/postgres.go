@@ -137,6 +137,42 @@ func (p *Postgres) IsBuiltInCommandEnabled(ctx context.Context, chatID int64, co
 	return enabled, nil
 }
 
+// GetVoiceRecognitionSettings returns the effective voice transcription settings.
+func (p *Postgres) GetVoiceRecognitionSettings(ctx context.Context, chatID int64) (database.VoiceRecognitionSettings, error) {
+	settings := database.VoiceRecognitionSettings{
+		ChatID: chatID, Enabled: true, Permission: "user", MaxDurationSeconds: 120,
+	}
+	err := p.pool.QueryRow(ctx, `
+		SELECT enabled, permission, max_duration_seconds
+		FROM voice_recognition_settings WHERE chat_id = $1`, chatID,
+	).Scan(&settings.Enabled, &settings.Permission, &settings.MaxDurationSeconds)
+	if err == pgx.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return settings, fmt.Errorf("get voice recognition settings: %w", err)
+	}
+	return settings, nil
+}
+
+// UpdateVoiceRecognitionSettings creates or updates a group's voice settings.
+func (p *Postgres) UpdateVoiceRecognitionSettings(ctx context.Context, settings database.VoiceRecognitionSettings) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO voice_recognition_settings (chat_id, enabled, permission, max_duration_seconds)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (chat_id) DO UPDATE SET
+			enabled = EXCLUDED.enabled,
+			permission = EXCLUDED.permission,
+			max_duration_seconds = EXCLUDED.max_duration_seconds,
+			updated_at = now()`,
+		settings.ChatID, settings.Enabled, settings.Permission, settings.MaxDurationSeconds,
+	)
+	if err != nil {
+		return fmt.Errorf("update voice recognition settings: %w", err)
+	}
+	return nil
+}
+
 // TrackChat records a chat where the bot received a trusted Telegram update.
 func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error {
 	_, err := p.pool.Exec(ctx,

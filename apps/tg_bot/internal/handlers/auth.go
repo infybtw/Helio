@@ -328,6 +328,48 @@ func (a *Auth) ListBuiltInCommands(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"commands": response})
 }
 
+func (a *Auth) GetVoiceRecognitionSettings(c *gin.Context) {
+	chatID, ok := a.ownedSelectedChatID(c)
+	if !ok {
+		return
+	}
+	settings, err := a.db.GetVoiceRecognitionSettings(c.Request.Context(), chatID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load voice recognition settings"})
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+func (a *Auth) UpdateVoiceRecognitionSettings(c *gin.Context) {
+	chatID, ok := a.ownedSelectedChatID(c)
+	if !ok {
+		return
+	}
+	var settings database.VoiceRecognitionSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid voice recognition settings"})
+		return
+	}
+	if (settings.Permission != "user" && settings.Permission != "moderator") || settings.MaxDurationSeconds < 1 || settings.MaxDurationSeconds > 3600 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid voice recognition settings"})
+		return
+	}
+	settings.ChatID = chatID
+	if err := a.db.UpdateVoiceRecognitionSettings(c.Request.Context(), settings); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to save voice recognition settings"})
+		return
+	}
+	session := SessionFromContext(c)
+	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{
+		ChatID: chatID, ActorID: session.UserID, ActorFirstName: session.FirstName,
+		Action: "voice recognition settings updated", EventType: "info",
+	}); err != nil {
+		a.log.Warn("failed to record voice settings activity", "error", err, "chat_id", chatID)
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
 type updateBuiltInCommandRequest struct {
 	Enabled      bool   `json:"enabled"`
 	Permission   string `json:"permission"`

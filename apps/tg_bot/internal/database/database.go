@@ -90,6 +90,14 @@ type BuiltInCommandSetting struct {
 	ReplyMessage string `json:"reply_message"`
 }
 
+// VoiceRecognitionSettings controls transcription for one group.
+type VoiceRecognitionSettings struct {
+	ChatID             int64  `json:"chat_id"`
+	Enabled            bool   `json:"enabled"`
+	Permission         string `json:"permission"`
+	MaxDurationSeconds int    `json:"max_duration_seconds"`
+}
+
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
 	// TrackChat records a chat where the bot received a trusted Telegram update.
@@ -122,6 +130,8 @@ type Store interface {
 	ResetBuiltInCommandSettings(ctx context.Context, chatID int64) error
 	GetBuiltInCommandSetting(ctx context.Context, chatID int64, command string) (BuiltInCommandSetting, bool, error)
 	IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error)
+	GetVoiceRecognitionSettings(ctx context.Context, chatID int64) (VoiceRecognitionSettings, error)
+	UpdateVoiceRecognitionSettings(ctx context.Context, settings VoiceRecognitionSettings) error
 	// Close releases database resources.
 	Close()
 }
