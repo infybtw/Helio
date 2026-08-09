@@ -79,6 +79,17 @@ type CustomCommandAction struct {
 	Payload string `json:"payload"`
 }
 
+// BuiltInCommandSetting is an owner-configured override for a built-in command.
+// Commands without a row remain enabled by default.
+type BuiltInCommandSetting struct {
+	ChatID       int64  `json:"chat_id"`
+	Command      string `json:"command"`
+	Enabled      bool   `json:"enabled"`
+	Permission   string `json:"permission"`
+	MuteDuration string `json:"mute_duration"`
+	ReplyMessage string `json:"reply_message"`
+}
+
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
 	// TrackChat records a chat where the bot received a trusted Telegram update.
@@ -105,6 +116,11 @@ type Store interface {
 	DeleteCustomCommand(ctx context.Context, id int64, chatIDs []int64) (CustomCommand, bool, error)
 	SetCustomCommandEnabled(ctx context.Context, id int64, enabled bool, chatIDs []int64) (bool, error)
 	FindCustomCommand(ctx context.Context, chatID int64, name string) (CustomCommand, bool, error)
+	ListBuiltInCommandSettings(ctx context.Context, chatID int64) ([]BuiltInCommandSetting, error)
+	SetBuiltInCommandEnabled(ctx context.Context, chatID int64, command string, enabled bool) error
+	UpdateBuiltInCommandSetting(ctx context.Context, setting BuiltInCommandSetting) error
+	GetBuiltInCommandSetting(ctx context.Context, chatID int64, command string) (BuiltInCommandSetting, bool, error)
+	IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error)
 	// Close releases database resources.
 	Close()
 }

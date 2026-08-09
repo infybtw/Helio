@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tg_bot/internal/auth"
+	"tg_bot/internal/commands"
 	"tg_bot/internal/database"
 	"tg_bot/internal/telegram"
 )
@@ -276,6 +277,179 @@ func (a *Auth) ListCommands(c *gin.Context) {
 	}
 	a.log.Info("dashboard commands loaded", "requested_chat_id", c.Query("chat_id"), "chat_ids", chatIDs, "command_count", len(commands))
 	c.JSON(http.StatusOK, gin.H{"commands": commands})
+}
+
+type builtInCommandResponse struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Permission   string `json:"permission"`
+	Enabled      bool   `json:"enabled"`
+	MuteDuration string `json:"mute_duration"`
+	ReplyMessage string `json:"reply_message"`
+}
+
+func (a *Auth) ListBuiltInCommands(c *gin.Context) {
+	chatID, ok := a.ownedSelectedChatID(c)
+	if !ok {
+		return
+	}
+	settings, err := a.db.ListBuiltInCommandSettings(c.Request.Context(), chatID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load built-in command settings"})
+		return
+	}
+	settingsByCommand := make(map[string]database.BuiltInCommandSetting, len(settings))
+	for _, setting := range settings {
+		settingsByCommand[setting.Command] = setting
+	}
+	response := make([]builtInCommandResponse, 0)
+	for _, command := range commands.BuiltInCommands() {
+		responseCommand := builtInCommandResponse{Name: command.Name, Description: command.Description, Permission: command.Permission, Enabled: true}
+		if command.Name == "!mute" {
+			responseCommand.MuteDuration = "30m"
+		}
+		if command.Name == "!help" {
+			responseCommand.ReplyMessage = commands.HelpText()
+		}
+		if setting, exists := settingsByCommand[command.Name]; exists {
+			responseCommand.Enabled = setting.Enabled
+			if setting.Permission != "" {
+				responseCommand.Permission = setting.Permission
+			}
+			if setting.MuteDuration != "" {
+				responseCommand.MuteDuration = setting.MuteDuration
+			}
+			if setting.ReplyMessage != "" || command.Name != "!help" {
+				responseCommand.ReplyMessage = setting.ReplyMessage
+			}
+		}
+		response = append(response, responseCommand)
+	}
+	c.JSON(http.StatusOK, gin.H{"commands": response})
+}
+
+type updateBuiltInCommandRequest struct {
+	Enabled      bool   `json:"enabled"`
+	Permission   string `json:"permission"`
+	MuteDuration string `json:"mute_duration"`
+	ReplyMessage string `json:"reply_message"`
+}
+
+func (a *Auth) UpdateBuiltInCommand(c *gin.Context) {
+	chatID, ok := a.ownedSelectedChatID(c)
+	if !ok {
+		return
+	}
+	commandName := strings.ToLower(strings.TrimSpace(c.Param("command")))
+	if !isBuiltInCommand(commandName) {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "built-in command not found"})
+		return
+	}
+	var request updateBuiltInCommandRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
+	request.MuteDuration = strings.TrimSpace(request.MuteDuration)
+	request.ReplyMessage = strings.TrimSpace(request.ReplyMessage)
+	if request.Permission != "user" && request.Permission != "moderator" && request.Permission != "owner" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid command permission"})
+		return
+	}
+	if commandName == "!mute" {
+		if request.MuteDuration == "" {
+			request.MuteDuration = "30m"
+		}
+		if _, err := commands.ParseDuration(request.MuteDuration); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid mute duration"})
+			return
+		}
+	} else if request.MuteDuration != "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "mute duration is only available for !mute"})
+		return
+	}
+	if len(request.ReplyMessage) > 4096 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "reply message is too long"})
+		return
+	}
+	setting := database.BuiltInCommandSetting{
+		ChatID: chatID, Command: commandName, Enabled: request.Enabled, Permission: request.Permission,
+		MuteDuration: request.MuteDuration, ReplyMessage: request.ReplyMessage,
+	}
+	if err := a.db.UpdateBuiltInCommandSetting(c.Request.Context(), setting); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to update built-in command setting"})
+		return
+	}
+	session := SessionFromContext(c)
+	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{
+		ChatID: chatID, ActorID: session.UserID, ActorFirstName: session.FirstName,
+		Action: "built-in command settings updated: " + commandName, EventType: "info",
+	}); err != nil {
+		a.log.Warn("failed to record built-in command setting activity", "error", err, "chat_id", chatID, "command", commandName)
+	}
+	if commandName == "!help" && setting.ReplyMessage == "" {
+		setting.ReplyMessage = commands.HelpText()
+	}
+	c.JSON(http.StatusOK, setting)
+}
+
+func (a *Auth) SetBuiltInCommandEnabled(c *gin.Context) {
+	chatID, ok := a.ownedSelectedChatID(c)
+	if !ok {
+		return
+	}
+	commandName := strings.ToLower(strings.TrimSpace(c.Param("command")))
+	if !isBuiltInCommand(commandName) {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "built-in command not found"})
+		return
+	}
+	var request struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	if err := a.db.SetBuiltInCommandEnabled(c.Request.Context(), chatID, commandName, request.Enabled); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to update built-in command setting"})
+		return
+	}
+	session := SessionFromContext(c)
+	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{
+		ChatID: chatID, ActorID: session.UserID, ActorFirstName: session.FirstName,
+		Action: "built-in command " + commandName + " " + map[bool]string{true: "enabled", false: "disabled"}[request.Enabled], EventType: "info",
+	}); err != nil {
+		a.log.Warn("failed to record built-in command setting activity", "error", err, "chat_id", chatID, "command", commandName)
+	}
+	c.JSON(http.StatusOK, gin.H{"command": commandName, "enabled": request.Enabled})
+}
+
+func (a *Auth) ownedSelectedChatID(c *gin.Context) (int64, bool) {
+	chatID, err := strconv.ParseInt(c.Query("chat_id"), 10, 64)
+	if err != nil || chatID == 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "chat_id is required"})
+		return 0, false
+	}
+	chatIDs, err := a.ownedChatIDs(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify chat ownership"})
+		return 0, false
+	}
+	if !containsChatID(chatIDs, chatID) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "you do not own this chat"})
+		return 0, false
+	}
+	return chatID, true
+}
+
+func isBuiltInCommand(name string) bool {
+	for _, command := range commands.BuiltInCommands() {
+		if command.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type createCommandRequest struct {

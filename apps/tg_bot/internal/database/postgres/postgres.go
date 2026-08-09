@@ -38,6 +38,96 @@ func (p *Postgres) Close() {
 	p.pool.Close()
 }
 
+// ListBuiltInCommandSettings returns the explicit settings for a chat. Built-in
+// commands without a row are enabled by default.
+func (p *Postgres) ListBuiltInCommandSettings(ctx context.Context, chatID int64) ([]database.BuiltInCommandSetting, error) {
+	rows, err := p.pool.Query(ctx, `SELECT chat_id, command, enabled, COALESCE(permission, ''), COALESCE(mute_duration, ''), COALESCE(reply_message, '') FROM built_in_command_settings WHERE chat_id = $1`, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("list built-in command settings: %w", err)
+	}
+	defer rows.Close()
+
+	settings := make([]database.BuiltInCommandSetting, 0)
+	for rows.Next() {
+		var setting database.BuiltInCommandSetting
+		if err := rows.Scan(&setting.ChatID, &setting.Command, &setting.Enabled, &setting.Permission, &setting.MuteDuration, &setting.ReplyMessage); err != nil {
+			return nil, fmt.Errorf("scan built-in command setting: %w", err)
+		}
+		settings = append(settings, setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate built-in command settings: %w", err)
+	}
+	return settings, nil
+}
+
+// SetBuiltInCommandEnabled creates or updates a command setting for a chat.
+func (p *Postgres) SetBuiltInCommandEnabled(ctx context.Context, chatID int64, command string, enabled bool) error {
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO built_in_command_settings (chat_id, command, enabled)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (chat_id, command) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()`,
+		chatID, command, enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("set built-in command enabled: %w", err)
+	}
+	return nil
+}
+
+// UpdateBuiltInCommandSetting creates or replaces an owner's configuration for
+// a built-in command.
+func (p *Postgres) UpdateBuiltInCommandSetting(ctx context.Context, setting database.BuiltInCommandSetting) error {
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO built_in_command_settings (chat_id, command, enabled, permission, mute_duration, reply_message)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''))
+		 ON CONFLICT (chat_id, command) DO UPDATE SET
+		   enabled = EXCLUDED.enabled,
+		   permission = EXCLUDED.permission,
+		   mute_duration = EXCLUDED.mute_duration,
+		   reply_message = EXCLUDED.reply_message,
+		   updated_at = now()`,
+		setting.ChatID, setting.Command, setting.Enabled, setting.Permission, setting.MuteDuration, setting.ReplyMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("update built-in command setting: %w", err)
+	}
+	return nil
+}
+
+// GetBuiltInCommandSetting returns a command's explicit per-chat setting.
+func (p *Postgres) GetBuiltInCommandSetting(ctx context.Context, chatID int64, command string) (database.BuiltInCommandSetting, bool, error) {
+	var setting database.BuiltInCommandSetting
+	err := p.pool.QueryRow(ctx,
+		`SELECT chat_id, command, enabled, COALESCE(permission, ''), COALESCE(mute_duration, ''), COALESCE(reply_message, '') FROM built_in_command_settings WHERE chat_id = $1 AND command = $2`,
+		chatID, command,
+	).Scan(&setting.ChatID, &setting.Command, &setting.Enabled, &setting.Permission, &setting.MuteDuration, &setting.ReplyMessage)
+	if err == pgx.ErrNoRows {
+		return database.BuiltInCommandSetting{}, false, nil
+	}
+	if err != nil {
+		return database.BuiltInCommandSetting{}, false, fmt.Errorf("get built-in command setting: %w", err)
+	}
+	return setting, true, nil
+}
+
+// IsBuiltInCommandEnabled reports whether a command is enabled for a chat.
+// A missing setting preserves the default enabled behavior.
+func (p *Postgres) IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error) {
+	var enabled bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT enabled FROM built_in_command_settings WHERE chat_id = $1 AND command = $2`,
+		chatID, command,
+	).Scan(&enabled)
+	if err == pgx.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get built-in command setting: %w", err)
+	}
+	return enabled, nil
+}
+
 // TrackChat records a chat where the bot received a trusted Telegram update.
 func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error {
 	_, err := p.pool.Exec(ctx,
