@@ -55,6 +55,19 @@ func Mute(ctx context.Context, client *telegram.Client, st database.Store, msg *
 	}
 
 	duration := defaultMuteDuration
+	setting, configured, err := st.GetBuiltInCommandSetting(ctx, msg.Chat.ID, "!mute")
+	if err != nil {
+		log.Warn("failed to load !mute setting", "error", err, "chat_id", msg.Chat.ID)
+		return
+	}
+	if configured && setting.MuteDuration != "" {
+		parsed, err := parseDuration(setting.MuteDuration)
+		if err != nil {
+			log.Warn("invalid stored !mute duration", "error", err, "chat_id", msg.Chat.ID, "duration", setting.MuteDuration)
+			return
+		}
+		duration = parsed
+	}
 	if len(fields) > 1 {
 		parsed, err := parseDuration(fields[1])
 		if err != nil {
@@ -141,4 +154,9 @@ func parseDuration(s string) (time.Duration, error) {
 	}
 
 	return 0, fmt.Errorf("invalid duration: %q", s)
+}
+
+// ParseDuration validates the duration format used by !mute.
+func ParseDuration(s string) (time.Duration, error) {
+	return parseDuration(s)
 }

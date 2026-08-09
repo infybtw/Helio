@@ -61,6 +61,56 @@ Commands are used by replying to a message in a group. Admin commands can be use
 
 4. Add the bot to your group and grant it admin rights (delete messages, ban users).
 
+## Run locally
+
+Prerequisites: Go, Bun, Docker (for Postgres), and a public HTTPS tunnel. Telegram cannot send webhooks or complete the OIDC callback against `localhost`.
+
+1. Copy and configure the local environment file:
+
+   ```sh
+   cp .env_example .env
+   ```
+
+   Set `DATABASE_URL` to `postgres://heliobot:heliobot@localhost:5432/heliobot`, `DASHBOARD_ORIGIN` to `http://localhost:3000`, and `COOKIE_SECURE` to `false`.
+
+   Start a tunnel to the bot API on port `8080`, then use its public HTTPS URL in both values registered with BotFather:
+
+   ```dotenv
+   WEBHOOK_URL=https://your-public-url/webhook
+   OIDC_REDIRECT_URI=https://your-public-url/api/auth/telegram/oidc/callback
+   ```
+
+   Set `SESSION_SECRET` to a strong random value, and add the Telegram Login Widget credentials (`OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`) from BotFather.
+
+2. Start Postgres and apply migrations from the repository root:
+
+   ```sh
+   docker compose -f docker-compose.dev.yml up -d postgres
+   go run ./apps/migrations
+   ```
+
+3. Start the bot API in one terminal:
+
+   ```sh
+   go run ./apps/tg_bot
+   ```
+
+4. Start the dashboard in another terminal:
+
+   ```sh
+   cd apps/web
+   bun install
+   NUXT_PUBLIC_API_BASE_URL=yourdomain.com bun run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000). The dashboard connects to `https://rp1.infybtw.dev` in this local setup.
+
+5. Stop the local database when finished:
+
+   ```sh
+   docker compose -f docker-compose.dev.yml down
+   ```
+
 ## Project structure
 
 ```

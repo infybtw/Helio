@@ -13,22 +13,34 @@ import (
 
 type handler func(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, log *slog.Logger)
 
-// adminCommands can be used by the group owner and users granted rights via !grant.
-var adminCommands = map[string]handler{
+// BuiltInCommand describes a command configurable by a chat owner.
+type BuiltInCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Permission  string `json:"permission"`
+}
+
+var builtInCommands = []BuiltInCommand{
+	{Name: "!delete", Description: "Delete the replied-to message.", Permission: "moderator"},
+	{Name: "!mute", Description: "Mute the replied-to user and delete their message.", Permission: "moderator"},
+	{Name: "!ban", Description: "Ban the replied-to user and delete their message.", Permission: "moderator"},
+	{Name: "!grant", Description: "Grant moderation command rights to the replied-to user.", Permission: "owner"},
+	{Name: "!revoke", Description: "Revoke moderation command rights from the replied-to user.", Permission: "owner"},
+	{Name: "!help", Description: "Show the available bot commands.", Permission: "user"},
+}
+
+// BuiltInCommands returns the commands owners can enable or disable per chat.
+func BuiltInCommands() []BuiltInCommand {
+	return append([]BuiltInCommand(nil), builtInCommands...)
+}
+
+var builtInHandlers = map[string]handler{
 	"!delete": Delete,
 	"!mute":   Mute,
 	"!ban":    Ban,
-}
-
-// ownerCommands can be used only by the group owner.
-var ownerCommands = map[string]handler{
 	"!grant":  Grant,
 	"!revoke": Revoke,
-}
-
-// userCommands can be used by any group member.
-var userCommands = map[string]handler{
-	"!help": Help,
+	"!help":   Help,
 }
 
 // Dispatch routes a message to the matching command handler based on the
@@ -44,33 +56,32 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 	}
 
 	command := strings.ToLower(fields[0])
-
-	if h, ok := userCommands[command]; ok {
-		h(ctx, client, st, msg, log)
-		return
-	}
-
-	if h, ok := ownerCommands[command]; ok {
-		if msg.From == nil || msg.Chat == nil {
+	if builtIn, ok := findBuiltInCommand(command); ok {
+		if msg.Chat == nil {
 			return
 		}
-		if !isGroupOwner(ctx, client, msg, log) {
+		setting, configured, err := st.GetBuiltInCommandSetting(ctx, msg.Chat.ID, command)
+		if err != nil {
+			log.Warn("failed to load built-in command setting", "error", err, "chat_id", msg.Chat.ID, "command", command)
+			return
+		}
+		if configured && !setting.Enabled {
+			return
+		}
+		permission := builtIn.Permission
+		if configured && setting.Permission != "" {
+			permission = setting.Permission
+		}
+		if msg.From == nil || !hasBuiltInCommandPermission(ctx, client, st, msg, permission, log) {
 			logUnauthorized(log, command, msg)
 			return
 		}
-		h(ctx, client, st, msg, log)
-		return
-	}
-
-	if h, ok := adminCommands[command]; ok {
-		if msg.From == nil || msg.Chat == nil {
-			return
+		if command != "!help" && configured && setting.ReplyMessage != "" {
+			if err := client.SendMessage(ctx, msg.Chat.ID, interpolateVariables(setting.ReplyMessage, msg), msg.MessageID); err != nil {
+				log.Warn("failed to send built-in command reply", "error", err, "chat_id", msg.Chat.ID, "command", command)
+			}
 		}
-		if !isGroupOwner(ctx, client, msg, log) && !isChatAdmin(ctx, st, msg, log) {
-			logUnauthorized(log, command, msg)
-			return
-		}
-		h(ctx, client, st, msg, log)
+		builtInHandlers[command](ctx, client, st, msg, log)
 		return
 	}
 
@@ -160,6 +171,34 @@ func Dispatch(ctx context.Context, client *telegram.Client, st database.Store, m
 				}
 			}
 		}
+	}
+}
+
+func isBuiltInCommand(command string) bool {
+	_, ok := findBuiltInCommand(command)
+	return ok
+}
+
+func findBuiltInCommand(command string) (BuiltInCommand, bool) {
+	for _, builtIn := range builtInCommands {
+		if builtIn.Name == command {
+			return builtIn, true
+		}
+	}
+	return BuiltInCommand{}, false
+}
+
+func hasBuiltInCommandPermission(ctx context.Context, client *telegram.Client, st database.Store, msg *telegram.Message, permission string, log *slog.Logger) bool {
+	switch permission {
+	case "user":
+		return true
+	case "owner":
+		return isGroupOwner(ctx, client, msg, log)
+	case "moderator":
+		return isGroupOwner(ctx, client, msg, log) || isChatAdmin(ctx, st, msg, log)
+	default:
+		log.Warn("ignoring built-in command with invalid permission", "chat_id", msg.Chat.ID, "permission", permission)
+		return false
 	}
 }
 
