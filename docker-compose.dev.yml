@@ -17,9 +17,25 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot?sslmode=disable
+      STT_URL: http://voice_recognizer:8000/stt
     depends_on:
       migrations:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  voice_recognizer:
+    build:
+      context: ./apps/voice_recognizer
+    ports:
+      - "8000:8000"
+    environment:
+      WHISPER_MODEL: small
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_CPU_THREADS: 4
+      STT_MAX_UPLOAD_BYTES: 26214400
+    volumes:
+      - whisper_models:/root/.cache/huggingface
     restart: unless-stopped
 
   migrations:
@@ -51,3 +67,4 @@ services:
 
 volumes:
   postgres_data:
+  whisper_models:

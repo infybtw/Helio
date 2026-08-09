@@ -15,6 +15,7 @@ import (
 	"tg_bot/internal/handlers"
 	"tg_bot/internal/httpserver"
 	"tg_bot/internal/logger"
+	"tg_bot/internal/stt"
 	"tg_bot/internal/telegram"
 )
 
@@ -38,6 +39,7 @@ func main() {
 	}
 
 	client := telegram.NewClient(cfg.BotToken)
+	sttClient := stt.NewClient(cfg.STTURL)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -76,7 +78,7 @@ func main() {
 	stateMgr := auth.NewOIDCStateManager(cfg.SessionSecret, 600, true, "none", cfg.CookieDomain)
 	oidcClient := auth.NewOIDCClient(cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURI, cfg.OIDCScopes)
 	authHandler := handlers.NewAuth(oidcClient, stateMgr, sessions, db, client, cfg.DashboardOrigin, cfg.DashboardURL, logger)
-	webhook := handlers.NewWebhook(client, db, cfg.WebhookSecret, logger)
+	webhook := handlers.NewWebhook(client, sttClient, db, cfg.WebhookSecret, logger)
 	server := httpserver.New(
 		":"+cfg.Port,
 		cfg.WebhookPath,

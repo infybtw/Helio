@@ -7,15 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const telegramAPIBase = "https://api.telegram.org/bot"
 
+const telegramFileBase = "https://api.telegram.org/file/bot"
+
 // Client is a thin HTTP client for the Telegram Bot API.
 type Client struct {
 	token   string
 	baseURL string
+	fileURL string
 	http    *http.Client
 }
 
@@ -24,8 +28,36 @@ func NewClient(token string) *Client {
 	return &Client{
 		token:   token,
 		baseURL: telegramAPIBase + token + "/",
+		fileURL: telegramFileBase + token + "/",
 		http:    &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// DownloadFile fetches a file by its Telegram file ID. The caller must close the body.
+func (c *Client) DownloadFile(ctx context.Context, fileID string) (io.ReadCloser, error) {
+	var file File
+	if err := c.call(ctx, "getFile", struct {
+		FileID string `json:"file_id"`
+	}{FileID: fileID}, &file); err != nil {
+		return nil, fmt.Errorf("get file metadata: %w", err)
+	}
+	if file.FilePath == "" {
+		return nil, fmt.Errorf("get file metadata: empty file path")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.fileURL+strings.TrimLeft(file.FilePath, "/"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create download request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download file: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download file: unexpected status %s", resp.Status)
+	}
+	return resp.Body, nil
 }
 
 // call invokes a Telegram Bot API method and decodes the response into dst.

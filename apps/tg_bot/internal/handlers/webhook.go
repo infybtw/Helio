@@ -5,11 +5,13 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"tg_bot/internal/commands"
 	"tg_bot/internal/database"
+	"tg_bot/internal/stt"
 	"tg_bot/internal/telegram"
 )
 
@@ -18,15 +20,17 @@ const secretTokenHeader = "X-Telegram-Bot-Api-Secret-Token"
 // Webhook processes incoming Telegram webhook updates.
 type Webhook struct {
 	client *telegram.Client
+	stt    *stt.Client
 	db     database.Store
 	secret string
 	log    *slog.Logger
 }
 
 // NewWebhook creates a new webhook handler.
-func NewWebhook(client *telegram.Client, st database.Store, secret string, log *slog.Logger) *Webhook {
+func NewWebhook(client *telegram.Client, sttClient *stt.Client, st database.Store, secret string, log *slog.Logger) *Webhook {
 	return &Webhook{
 		client: client,
+		stt:    sttClient,
 		db:     st,
 		secret: secret,
 		log:    log,
@@ -83,6 +87,7 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.Message.Chat.Type,
 			"text", update.Message.Text,
 		)
+		w.transcribeVoice(ctx, update.Message)
 		commands.Dispatch(ctx, w.client, w.db, update.Message, w.log)
 	case update.EditedMessage != nil:
 		if update.EditedMessage.Chat == nil {
@@ -106,6 +111,31 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 		commands.Dispatch(ctx, w.client, w.db, update.EditedMessage, w.log)
 	case update.MyChatMember != nil:
 		w.trackBotChatMembership(ctx, update.MyChatMember)
+	}
+}
+
+func (w *Webhook) transcribeVoice(ctx context.Context, msg *telegram.Message) {
+	if msg.Voice == nil || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
+		return
+	}
+
+	audio, err := w.client.DownloadFile(ctx, msg.Voice.FileID)
+	if err != nil {
+		w.log.Error("failed to download voice message", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+		return
+	}
+	defer audio.Close()
+
+	text, err := w.stt.Transcribe(ctx, audio, "voice.ogg")
+	if err != nil {
+		w.log.Error("failed to transcribe voice message", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	if err := w.client.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID); err != nil {
+		w.log.Error("failed to send voice transcription", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
 	}
 }
 
