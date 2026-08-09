@@ -91,6 +91,7 @@ const builtInCommands = ref<BuiltInCommand[]>([])
 const builtInCommandsLoading = ref(false)
 const builtInCommandsError = ref<string | null>(null)
 const updatingBuiltInCommand = ref<string | null>(null)
+const resettingBuiltInCommands = ref(false)
 const builtInCommandModalOpen = ref(false)
 const editingBuiltInCommand = ref<BuiltInCommand | null>(null)
 const builtInCommandEnabled = ref(true)
@@ -177,6 +178,24 @@ async function toggleBuiltInCommand(command: BuiltInCommand) {
     builtInCommandsError.value = 'Не удалось изменить статус встроенной команды.'
   } finally {
     updatingBuiltInCommand.value = null
+  }
+}
+
+async function resetBuiltInCommands() {
+  if (!selectedChatID.value || resettingBuiltInCommands.value) return
+  if (!window.confirm('Reset all built-in command settings for this chat to defaults?')) return
+  resettingBuiltInCommands.value = true
+  builtInCommandsError.value = null
+  try {
+    await $fetch(`${baseURL}/api/dashboard/built-in-commands/reset?chat_id=${selectedChatID.value}`, {
+      method: 'POST', credentials: 'include'
+    })
+    await loadBuiltInCommands()
+    builtInCommandModalOpen.value = false
+  } catch {
+    builtInCommandsError.value = 'Не удалось сбросить настройки встроенных команд.'
+  } finally {
+    resettingBuiltInCommands.value = false
   }
 }
 
@@ -713,7 +732,7 @@ onUnmounted(() => {
                <div v-else class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
                  <div class="flex items-start justify-between gap-4 border-b border-white/[0.06] pb-5">
                    <div><h2 class="font-semibold text-zinc-200">Built-In command settings</h2><p class="mt-1 max-w-xl text-sm leading-6 text-zinc-500">Enable only the commands your group needs. Disabled commands are ignored by the bot.</p></div>
-                   <button type="button" class="inline-flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-500 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" :disabled="builtInCommandsLoading" @click="loadBuiltInCommands">Refresh</button>
+                   <div class="flex shrink-0 items-center gap-2"><button type="button" class="rounded-lg px-2.5 py-2 text-xs text-zinc-600 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-wait disabled:opacity-50" :disabled="builtInCommandsLoading || resettingBuiltInCommands" @click="resetBuiltInCommands">Reset defaults</button><button type="button" class="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-500 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" :disabled="builtInCommandsLoading || resettingBuiltInCommands" @click="loadBuiltInCommands">Refresh</button></div>
                  </div>
                  <p v-if="builtInCommandsError" class="mt-4 text-xs text-rose-300">{{ builtInCommandsError }}</p>
                  <div v-else-if="builtInCommandsLoading" class="py-10 text-center text-sm text-zinc-500">Loading built-in commands...</div>

@@ -27,6 +27,7 @@ func RegisterAuthRoutes(auth *Auth) httpserver.RouteFunc {
 		protected.GET("/activity", auth.ListActivity)
 		protected.GET("/commands", auth.ListCommands)
 		protected.GET("/built-in-commands", auth.ListBuiltInCommands)
+		protected.POST("/built-in-commands/reset", auth.ResetBuiltInCommands)
 		protected.PUT("/built-in-commands/:command", auth.UpdateBuiltInCommand)
 		protected.PATCH("/built-in-commands/:command/enabled", auth.SetBuiltInCommandEnabled)
 		protected.POST("/commands", auth.CreateCommand)

@@ -119,6 +119,7 @@ type Store interface {
 	ListBuiltInCommandSettings(ctx context.Context, chatID int64) ([]BuiltInCommandSetting, error)
 	SetBuiltInCommandEnabled(ctx context.Context, chatID int64, command string, enabled bool) error
 	UpdateBuiltInCommandSetting(ctx context.Context, setting BuiltInCommandSetting) error
+	ResetBuiltInCommandSettings(ctx context.Context, chatID int64) error
 	GetBuiltInCommandSetting(ctx context.Context, chatID int64, command string) (BuiltInCommandSetting, bool, error)
 	IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error)
 	// Close releases database resources.

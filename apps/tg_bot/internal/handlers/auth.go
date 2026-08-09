@@ -425,6 +425,25 @@ func (a *Auth) SetBuiltInCommandEnabled(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"command": commandName, "enabled": request.Enabled})
 }
 
+func (a *Auth) ResetBuiltInCommands(c *gin.Context) {
+	chatID, ok := a.ownedSelectedChatID(c)
+	if !ok {
+		return
+	}
+	if err := a.db.ResetBuiltInCommandSettings(c.Request.Context(), chatID); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to reset built-in command settings"})
+		return
+	}
+	session := SessionFromContext(c)
+	if err := a.db.RecordAction(c.Request.Context(), database.ActionRecord{
+		ChatID: chatID, ActorID: session.UserID, ActorFirstName: session.FirstName,
+		Action: "built-in command settings reset", EventType: "info",
+	}); err != nil {
+		a.log.Warn("failed to record built-in command reset activity", "error", err, "chat_id", chatID)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (a *Auth) ownedSelectedChatID(c *gin.Context) (int64, bool) {
 	chatID, err := strconv.ParseInt(c.Query("chat_id"), 10, 64)
 	if err != nil || chatID == 0 {

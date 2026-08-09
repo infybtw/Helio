@@ -95,6 +95,15 @@ func (p *Postgres) UpdateBuiltInCommandSetting(ctx context.Context, setting data
 	return nil
 }
 
+// ResetBuiltInCommandSettings removes all explicit overrides for a chat.
+func (p *Postgres) ResetBuiltInCommandSettings(ctx context.Context, chatID int64) error {
+	_, err := p.pool.Exec(ctx, `DELETE FROM built_in_command_settings WHERE chat_id = $1`, chatID)
+	if err != nil {
+		return fmt.Errorf("reset built-in command settings: %w", err)
+	}
+	return nil
+}
+
 // GetBuiltInCommandSetting returns a command's explicit per-chat setting.
 func (p *Postgres) GetBuiltInCommandSetting(ctx context.Context, chatID int64, command string) (database.BuiltInCommandSetting, bool, error) {
 	var setting database.BuiltInCommandSetting
