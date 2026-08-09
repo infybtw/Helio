@@ -127,6 +127,9 @@ func Mute(ctx context.Context, client *telegram.Client, st database.Store, msg *
 // suffix for days (e.g. "1d", "2d12h").
 func parseDuration(s string) (time.Duration, error) {
 	if d, err := time.ParseDuration(s); err == nil {
+		if d <= 0 {
+			return 0, fmt.Errorf("duration must be positive: %q", s)
+		}
 		return d, nil
 	}
 
@@ -149,6 +152,9 @@ func parseDuration(s string) (time.Duration, error) {
 				return 0, fmt.Errorf("invalid duration: %w", err)
 			}
 			d += extra
+		}
+		if d <= 0 {
+			return 0, fmt.Errorf("duration must be positive: %q", s)
 		}
 		return d, nil
 	}

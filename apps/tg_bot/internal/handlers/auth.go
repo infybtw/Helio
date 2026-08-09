@@ -306,7 +306,7 @@ func (a *Auth) ListBuiltInCommands(c *gin.Context) {
 	for _, command := range commands.BuiltInCommands() {
 		responseCommand := builtInCommandResponse{Name: command.Name, Description: command.Description, Permission: command.Permission, Enabled: true}
 		if command.Name == "!mute" {
-			responseCommand.MuteDuration = "30m"
+			responseCommand.MuteDuration = "30"
 		}
 		if command.Name == "!help" {
 			responseCommand.ReplyMessage = commands.HelpText()
@@ -359,9 +359,10 @@ func (a *Auth) UpdateBuiltInCommand(c *gin.Context) {
 	}
 	if commandName == "!mute" {
 		if request.MuteDuration == "" {
-			request.MuteDuration = "30m"
+			request.MuteDuration = "30"
 		}
-		if _, err := commands.ParseDuration(request.MuteDuration); err != nil {
+		minutes, err := strconv.Atoi(request.MuteDuration)
+		if err != nil || minutes <= 0 {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid mute duration"})
 			return
 		}
@@ -488,7 +489,7 @@ func (a *Auth) CreateCommand(c *gin.Context) {
 	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
 	request.Aliases = normalizeAliases(request.Aliases)
 	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
-	if !validCommandRequest(request) {
+	if !validCommandRequest(&request) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
 		return
 	}
@@ -529,7 +530,7 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 	request.Name = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(request.Name, "!")))
 	request.Aliases = normalizeAliases(request.Aliases)
 	request.Permission = strings.ToLower(strings.TrimSpace(request.Permission))
-	if !validCommandRequest(request) {
+	if !validCommandRequest(&request) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "name and at least one message action are required"})
 		return
 	}
@@ -559,7 +560,7 @@ func (a *Auth) UpdateCommand(c *gin.Context) {
 	c.JSON(http.StatusOK, command)
 }
 
-func validCommandRequest(request createCommandRequest) bool {
+func validCommandRequest(request *createCommandRequest) bool {
 	if request.ChatID == 0 || request.Name == "" || len(request.Name) > 32 || len(request.Actions) == 0 || len(request.Aliases) > 10 || (request.Permission != "user" && request.Permission != "moderator" && request.Permission != "owner") || strings.ContainsAny(request.Name, " !\t\r\n") {
 		return false
 	}
@@ -574,20 +575,26 @@ func validCommandRequest(request createCommandRequest) bool {
 		seenAliases[alias] = struct{}{}
 	}
 	for i := range request.Actions {
-		request.Actions[i].Payload = strings.TrimSpace(request.Actions[i].Payload)
-		if request.Actions[i].Type != "send_message" && request.Actions[i].Type != "reply_message" && request.Actions[i].Type != "mute" && request.Actions[i].Type != "delete_message" {
+		action := &request.Actions[i]
+		action.Payload = strings.TrimSpace(action.Payload)
+		if action.Type != "send_message" && action.Type != "reply_message" && action.Type != "mute" && action.Type != "delete_message" {
 			return false
 		}
-		if (request.Actions[i].Type == "send_message" || request.Actions[i].Type == "reply_message") && (request.Actions[i].Payload == "" || len(request.Actions[i].Payload) > 4096) {
+		if (action.Type == "send_message" || action.Type == "reply_message") && (action.Payload == "" || len(action.Payload) > 4096) {
 			return false
 		}
-		if request.Actions[i].Type == "mute" && request.Actions[i].Payload == "" {
-			request.Actions[i].Payload = "30m"
+		if action.Type == "mute" {
+			if action.Payload == "" {
+				action.Payload = "30m"
+			}
+			if _, err := commands.ParseDuration(action.Payload); err != nil {
+				return false
+			}
 		}
-		if request.Actions[i].Type == "delete_message" {
-			request.Actions[i].Payload = ""
+		if action.Type == "delete_message" {
+			action.Payload = ""
 		}
-		if len(request.Actions[i].Payload) > 4096 {
+		if len(action.Payload) > 4096 {
 			return false
 		}
 	}

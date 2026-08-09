@@ -97,6 +97,7 @@ const editingBuiltInCommand = ref<BuiltInCommand | null>(null)
 const builtInCommandEnabled = ref(true)
 const builtInCommandPermission = ref<BuiltInCommand['permission']>('moderator')
 const builtInCommandMuteDuration = ref('')
+const builtInCommandMuteDurationError = ref<string | null>(null)
 const builtInCommandReplyMessage = ref('')
 const savingBuiltInCommand = ref(false)
 const groupDataLoading = ref(false)
@@ -203,7 +204,8 @@ function openEditBuiltInCommand(command: BuiltInCommand) {
   editingBuiltInCommand.value = command
   builtInCommandEnabled.value = command.enabled
   builtInCommandPermission.value = command.permission
-  builtInCommandMuteDuration.value = command.mute_duration
+  builtInCommandMuteDuration.value = muteDurationToMinutes(command.mute_duration)
+  builtInCommandMuteDurationError.value = null
   builtInCommandReplyMessage.value = command.reply_message
   builtInCommandsError.value = null
   builtInCommandModalOpen.value = true
@@ -212,24 +214,44 @@ function openEditBuiltInCommand(command: BuiltInCommand) {
 async function saveBuiltInCommand() {
   const command = editingBuiltInCommand.value
   if (!command || !selectedChatID.value) return
+  const muteDuration = builtInCommandMuteDuration.value == null ? '' : String(builtInCommandMuteDuration.value)
+  if (command.name === '!mute' && !isValidMuteDuration(muteDuration)) {
+    builtInCommandMuteDurationError.value = 'Incorrect value'
+    return
+  }
   savingBuiltInCommand.value = true
-  builtInCommandsError.value = null
   try {
     const updated = await $fetch<BuiltInCommand>(`${baseURL}/api/dashboard/built-in-commands/${encodeURIComponent(command.name)}?chat_id=${selectedChatID.value}`, {
       method: 'PUT', credentials: 'include', body: {
         enabled: builtInCommandEnabled.value,
         permission: builtInCommandPermission.value,
-        mute_duration: command.name === '!mute' ? builtInCommandMuteDuration.value : '',
+         mute_duration: command.name === '!mute' ? muteDuration : '',
         reply_message: builtInCommandReplyMessage.value
       }
     })
     builtInCommands.value = builtInCommands.value.map((item) => item.name === updated.name ? { ...item, ...updated } : item)
+    await loadBuiltInCommands()
     builtInCommandModalOpen.value = false
   } catch {
-    builtInCommandsError.value = 'Не удалось сохранить настройки встроенной команды.'
+    if (command.name === '!mute') builtInCommandMuteDurationError.value = 'Incorrect value'
   } finally {
     savingBuiltInCommand.value = false
   }
+}
+
+function isValidMuteDuration(value: string | number): boolean {
+  const input = String(value).trim()
+  return input === '' || (/^[1-9]\d*$/.test(input) && Number.isSafeInteger(Number(input)))
+}
+
+function muteDurationToMinutes(value: string): string {
+  const input = value.trim()
+  if (/^\d+$/.test(input)) return input
+  const match = input.match(/^(\d+)([mhd])$/i)
+  if (!match) return input
+  const unit = match[2].toLowerCase()
+  const multiplier = unit === 'h' ? 60 : unit === 'd' ? 1440 : 1
+  return String(Number(match[1]) * multiplier)
 }
 
 async function selectChat(chatID: number | null) {
@@ -750,14 +772,14 @@ onUnmounted(() => {
     </template>
 
     <div v-if="builtInCommandModalOpen && editingBuiltInCommand" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-5 py-8 backdrop-blur-sm" @click.self="builtInCommandModalOpen = false">
-      <form class="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-[#15181d] p-6 shadow-2xl" @submit.prevent="saveBuiltInCommand">
+       <form class="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-[#15181d] p-6 shadow-2xl" @submit.prevent="saveBuiltInCommand">
         <div class="flex items-start justify-between gap-4"><div><h2 class="text-lg font-semibold">Edit {{ editingBuiltInCommand.name }}</h2><p class="mt-1 text-sm text-zinc-500">Changes apply only to {{ selectedChat?.name || 'this chat' }}.</p></div><button type="button" class="text-zinc-600 hover:text-zinc-200" aria-label="Close" @click="builtInCommandModalOpen = false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div>
         <label class="mt-6 flex items-center justify-between gap-4 rounded-xl border border-white/[0.08] bg-[#111418] px-4 py-3"><span><span class="block text-sm font-medium text-zinc-200">Command enabled</span><span class="mt-1 block text-xs text-zinc-600">Disabled commands are ignored by the bot.</span></span><button type="button" role="switch" :aria-checked="builtInCommandEnabled" class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-300/40" :class="builtInCommandEnabled ? 'bg-emerald-400/80' : 'bg-zinc-700'" @click="builtInCommandEnabled = !builtInCommandEnabled"><span class="block h-4 w-4 rounded-full bg-white shadow-sm transition-transform" :class="builtInCommandEnabled ? 'translate-x-5' : 'translate-x-0'"></span></button></label>
         <label class="mt-4 block text-xs text-zinc-500">Who can use it<select v-model="builtInCommandPermission" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-amber-300/50"><option value="user">User — everyone</option><option value="moderator">Moderator — owner and granted moderators</option><option value="owner">Owner — chat owner only</option></select></label>
-        <label v-if="editingBuiltInCommand.name === '!mute'" class="mt-4 block text-xs text-zinc-500">Default mute duration<input v-model="builtInCommandMuteDuration" placeholder="30m" class="mt-2 w-full rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-amber-300/50"><span class="mt-1 block text-[11px] text-zinc-600">Accepts minutes, Go durations such as `1h30m`, or days such as `2d`.</span></label>
+          <label v-if="editingBuiltInCommand.name === '!mute'" class="mt-4 block text-xs text-zinc-500">Default mute duration<div class="mt-2 flex overflow-hidden rounded-xl border bg-[#111418]" :class="builtInCommandMuteDurationError ? 'border-red-500/70' : 'border-white/[0.1] focus-within:border-amber-300/50'"><input v-model="builtInCommandMuteDuration" @input="builtInCommandMuteDurationError = null" type="number" min="1" step="1" inputmode="numeric" placeholder="30" :aria-invalid="Boolean(builtInCommandMuteDurationError)" class="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-700"><span class="flex items-center border-l border-white/[0.1] px-3 font-mono text-sm text-zinc-500">min</span></div><span v-if="builtInCommandMuteDurationError" class="mt-1 block text-[11px] text-red-400" role="alert">{{ builtInCommandMuteDurationError }}</span><span v-else class="mt-1 block text-[11px] text-zinc-600">Enter the default mute duration in whole minutes.</span></label>
          <div class="mt-4 flex items-center justify-between gap-4"><span class="text-xs text-zinc-500">{{ editingBuiltInCommand.name === '!help' ? 'Help output' : 'Reply message (optional)' }}</span><button type="button" class="inline-flex items-center gap-2 rounded-lg border border-amber-300/20 bg-amber-300/10 px-2.5 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-300/20" @click="variablesModalOpen = true">Variables</button></div>
          <label class="mt-2 block text-xs text-zinc-500"><textarea v-model="builtInCommandReplyMessage" maxlength="4096" rows="7" :placeholder="editingBuiltInCommand.name === '!help' ? 'Available commands...' : 'This action has been completed.'" class="w-full resize-none rounded-xl border border-white/[0.1] bg-[#111418] px-3 py-3 text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-amber-300/50"></textarea><span class="mt-1 block text-[11px] text-zinc-600">{{ editingBuiltInCommand.name === '!help' ? 'This text replaces the default !help output. Clear it to restore the default.' : 'Sent as a reply when this command is used.' }}</span></label>
-        <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-xl px-4 py-2.5 text-sm text-zinc-500 hover:text-zinc-200" @click="builtInCommandModalOpen = false">Cancel</button><button :disabled="savingBuiltInCommand" type="submit" class="rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">{{ savingBuiltInCommand ? 'Saving...' : 'Save changes' }}</button></div>
+          <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-xl px-4 py-2.5 text-sm text-zinc-500 hover:text-zinc-200" @click="builtInCommandModalOpen = false">Cancel</button><button :disabled="savingBuiltInCommand" type="submit" class="rounded-xl bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">{{ savingBuiltInCommand ? 'Saving...' : 'Save changes' }}</button></div>
       </form>
     </div>
 
