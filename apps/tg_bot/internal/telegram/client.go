@@ -141,11 +141,22 @@ type SendMessageParams struct {
 
 // SendMessage sends a text message to a chat.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, replyToMessageID int64) error {
-	return c.call(ctx, "sendMessage", SendMessageParams{
+	_, err := c.SendMessageResult(ctx, chatID, text, replyToMessageID)
+	return err
+}
+
+// SendMessageResult sends a text message and returns Telegram's created message.
+func (c *Client) SendMessageResult(ctx context.Context, chatID int64, text string, replyToMessageID int64) (*Message, error) {
+	var message Message
+	err := c.call(ctx, "sendMessage", SendMessageParams{
 		ChatID:           chatID,
 		Text:             text,
 		ReplyToMessageID: replyToMessageID,
-	}, nil)
+	}, &message)
+	if err != nil {
+		return nil, err
+	}
+	return &message, nil
 }
 
 // DeleteMessageParams contains parameters for the deleteMessage method.

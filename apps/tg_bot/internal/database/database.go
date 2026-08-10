@@ -110,6 +110,12 @@ type VoiceTranscription struct {
 	AudioDurationSeconds float64
 }
 
+// VoiceTranscriptionReplyClaim reports whether this delivery owns the Telegram reply.
+type VoiceTranscriptionReplyClaim struct {
+	Claimed bool
+	Sent    bool
+}
+
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
 	// TrackChat records a chat where the bot received a trusted Telegram update.
@@ -144,7 +150,9 @@ type Store interface {
 	IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error)
 	GetVoiceRecognitionSettings(ctx context.Context, chatID int64) (VoiceRecognitionSettings, error)
 	UpdateVoiceRecognitionSettings(ctx context.Context, settings VoiceRecognitionSettings) error
-	RecordVoiceTranscription(ctx context.Context, transcription VoiceTranscription) error
+	ClaimVoiceTranscriptionReply(ctx context.Context, transcription VoiceTranscription, claimToken string) (VoiceTranscriptionReplyClaim, error)
+	MarkVoiceTranscriptionReplySent(ctx context.Context, chatID, messageID int64, claimToken string, replyMessageID int64) error
+	ReleaseVoiceTranscriptionReply(ctx context.Context, chatID, messageID int64, claimToken string) error
 	// Close releases database resources.
 	Close()
 }

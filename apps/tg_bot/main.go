@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -86,29 +89,49 @@ func main() {
 	oidcClient := auth.NewOIDCClient(cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURI, cfg.OIDCScopes)
 	authHandler := handlers.NewAuth(oidcClient, stateMgr, sessions, db, client, cfg.DashboardOrigin, cfg.DashboardURL, logger)
 	if _, err := voices.SubscribeResults(func(result voicequeue.Result) error {
-		if err := db.RecordVoiceTranscription(ctx, database.VoiceTranscription{
+		claimToken, err := newClaimToken()
+		if err != nil {
+			return err
+		}
+		claim, err := db.ClaimVoiceTranscriptionReply(ctx, database.VoiceTranscription{
 			JobID: result.JobID, ChatID: result.ChatID, MessageID: result.MessageID, Transcript: result.Text,
 			Language: result.Language, LanguageProbability: result.LanguageProbability,
 			TranscriptionSeconds: result.TranscriptionSeconds, AudioDurationSeconds: result.AudioDurationSeconds,
-		}); err != nil {
-			logger.Error("failed to record voice transcription", "error", err, "job_id", result.JobID)
+		}, claimToken)
+		if err != nil {
+			logger.Error("failed to claim voice transcription reply", "error", err, "job_id", result.JobID)
 			return err
 		}
+		if claim.Sent {
+			logger.Info("voice transcription reply already sent", "job_id", result.JobID)
+			return nil
+		}
+		if !claim.Claimed {
+			return fmt.Errorf("voice transcription reply is being sent by another worker: %s", result.JobID)
+		}
 		logger.Info(
-			"recorded voice transcription",
+			"claimed voice transcription reply",
 			"job_id", result.JobID,
 			"transcription_seconds", result.TranscriptionSeconds,
 			"text_length", utf8.RuneCountInString(result.Text),
 		)
 		if result.Text == "" {
-			return nil
+			return db.MarkVoiceTranscriptionReplySent(ctx, result.ChatID, result.MessageID, claimToken, 0)
 		}
 		reply := result.Text
 		if utf8.RuneCountInString(reply) > 4096 {
 			reply = "Расшифровка недоступна, слишком длинное сообщение"
 		}
-		if err := client.SendMessage(ctx, result.ChatID, reply, result.MessageID); err != nil {
+		sent, err := client.SendMessageResult(ctx, result.ChatID, reply, result.MessageID)
+		if err != nil {
 			logger.Error("failed to send voice transcription", "error", err, "job_id", result.JobID)
+			if releaseErr := db.ReleaseVoiceTranscriptionReply(ctx, result.ChatID, result.MessageID, claimToken); releaseErr != nil {
+				logger.Error("failed to release voice transcription reply", "error", releaseErr, "job_id", result.JobID)
+			}
+			return err
+		}
+		if err := db.MarkVoiceTranscriptionReplySent(ctx, result.ChatID, result.MessageID, claimToken, sent.MessageID); err != nil {
+			logger.Error("failed to record sent voice transcription", "error", err, "job_id", result.JobID)
 			return err
 		}
 		logger.Info("sent voice transcription", "job_id", result.JobID, "language", result.Language)
@@ -150,4 +173,12 @@ func main() {
 	}
 
 	logger.Info("shutdown complete")
+}
+
+func newClaimToken() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate voice transcription claim token: %w", err)
+	}
+	return hex.EncodeToString(bytes), nil
 }

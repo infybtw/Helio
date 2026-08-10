@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from apps.voice_recognizer.app.main import Settings, create_app
+from apps.voice_recognizer.app import worker
 from apps.voice_recognizer.app.worker import VoiceJob
 
 
@@ -71,3 +72,13 @@ def test_voice_job_preserves_media_file_suffix() -> None:
 
     assert legacy_job.file_suffix == ".ogg"
     assert job.file_suffix == ".mp4"
+
+
+def test_worker_consumer_extends_long_running_jobs() -> None:
+    config = worker.worker_consumer_config()
+
+    assert config.durable_name == worker.WORKER_DURABLE
+    assert config.filter_subject == worker.JOBS_SUBJECT
+    assert config.ack_wait == worker.ACK_WAIT_SECONDS
+    assert config.backoff[0] == worker.ACK_WAIT_SECONDS
+    assert config.max_deliver == 5

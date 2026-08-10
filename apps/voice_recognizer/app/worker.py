@@ -10,7 +10,7 @@ from typing import Any
 import nats
 from nats.aio.msg import Msg
 from nats.errors import TimeoutError
-from nats.js.api import ObjectStoreConfig, StorageType, StreamConfig
+from nats.js.api import AckPolicy, ConsumerConfig, ObjectStoreConfig, StorageType, StreamConfig
 from nats.js.errors import BucketNotFoundError, NotFoundError
 from pydantic import BaseModel
 
@@ -21,6 +21,9 @@ logger = logging.getLogger("voice_recognizer")
 VOICE_BUCKET = "VOICE"
 JOBS_SUBJECT = "stt.jobs"
 RESULTS_SUBJECT = "stt.results"
+WORKER_DURABLE = "voice-recognizer-workers"
+ACK_WAIT_SECONDS = 5 * 60
+HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 class VoiceJob(BaseModel):
@@ -41,6 +44,24 @@ class TranscriptionResult(BaseModel):
     language_probability: float
     transcription_seconds: float
     audio_duration_seconds: float
+
+
+async def keep_message_alive(message: Msg) -> None:
+    """Extend the JetStream acknowledgement deadline while transcription runs."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        await message.in_progress()
+
+
+def worker_consumer_config() -> ConsumerConfig:
+    return ConsumerConfig(
+        durable_name=WORKER_DURABLE,
+        filter_subject=JOBS_SUBJECT,
+        ack_policy=AckPolicy.EXPLICIT,
+        ack_wait=ACK_WAIT_SECONDS,
+        max_deliver=5,
+        backoff=[ACK_WAIT_SECONDS, 15 * 60, 30 * 60, 60 * 60, 2 * 60 * 60],
+    )
 
 
 async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lock) -> tuple[Any, asyncio.Task[None]]:
@@ -127,6 +148,7 @@ async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lo
             try:
                 queued_at = time.perf_counter()
                 logger.info("job waiting for model job_id=%s", job.job_id)
+                heartbeat_task = asyncio.create_task(keep_message_alive(message))
                 async with transcription_lock:
                     transcription_started_at = time.perf_counter()
                     logger.info(
@@ -136,6 +158,9 @@ async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lo
                     )
                     result = await asyncio.to_thread(transcribe, model, audio_path, job.language)
             finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
                 audio_path.unlink(missing_ok=True)
             transcription_seconds = time.perf_counter() - transcription_started_at
             logger.info(
@@ -176,9 +201,17 @@ async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lo
             await asyncio.sleep(1)
             await message.nak()
 
+    consumer_config = worker_consumer_config()
+    try:
+        await jetstream.consumer_info("STT", WORKER_DURABLE)
+        # JetStream uses the durable consumer create endpoint for updates too.
+        await jetstream.add_consumer("STT", consumer_config)
+    except NotFoundError:
+        await jetstream.add_consumer("STT", consumer_config)
+
     subscription = await jetstream.pull_subscribe(
         JOBS_SUBJECT,
-        durable="voice-recognizer-workers",
+        durable=WORKER_DURABLE,
         stream="STT",
     )
 
@@ -191,7 +224,7 @@ async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lo
             for message in messages:
                 await process(message)
 
-    logger.info("JetStream worker started nats_url=%s subject=%s durable=voice-recognizer-workers", nats_url, JOBS_SUBJECT)
+    logger.info("JetStream worker started nats_url=%s subject=%s durable=%s ack_wait_seconds=%d", nats_url, JOBS_SUBJECT, WORKER_DURABLE, ACK_WAIT_SECONDS)
     return connection, asyncio.create_task(consume())
 
 
