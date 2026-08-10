@@ -43,7 +43,23 @@ class TranscriptionResult(BaseModel):
 
 
 async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lock) -> tuple[Any, asyncio.Task[None]]:
-    connection = await nats.connect(nats_url)
+    async def on_disconnected() -> None:
+        logger.warning("JetStream connection lost; retrying in 30 seconds")
+
+    async def on_reconnected() -> None:
+        logger.info("JetStream connection restored")
+
+    async def on_error(error: Exception) -> None:
+        logger.warning("JetStream reconnect attempt failed error=%s", error)
+
+    connection = await nats.connect(
+        nats_url,
+        reconnect_time_wait=30,
+        max_reconnect_attempts=-1,
+        error_cb=on_error,
+        disconnected_cb=on_disconnected,
+        reconnected_cb=on_reconnected,
+    )
     jetstream = connection.jetstream()
     try:
         await jetstream.stream_info("STT")

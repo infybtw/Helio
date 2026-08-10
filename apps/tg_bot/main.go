@@ -40,7 +40,7 @@ func main() {
 	}
 
 	client := telegram.NewClient(cfg.BotToken)
-	voices, err := voicequeue.NewClient(cfg.NATSURL)
+	voices, err := voicequeue.NewClient(cfg.NATSURL, logger)
 	if err != nil {
 		logger.Error("failed to connect to NATS", "error", err)
 		os.Exit(1)

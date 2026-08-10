@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -42,22 +44,53 @@ type Result struct {
 
 // Client stores voice files and dispatches transcription jobs through JetStream.
 type Client struct {
+	url     string
+	log     *slog.Logger
+	mu      sync.Mutex
 	nc      *nats.Conn
 	js      nats.JetStreamContext
 	objects nats.ObjectStore
+	handler func(Result) error
+	sub     *nats.Subscription
 }
 
 // NewClient connects to JetStream and creates its voice workflow resources.
-func NewClient(url string) (*Client, error) {
-	nc, err := nats.Connect(url, nats.Name("heliobot-tg-bot"))
+func NewClient(url string, log *slog.Logger) (*Client, error) {
+	client := &Client{url: url, log: log}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if err := client.connectLocked(false); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func (c *Client) connectLocked(reconnecting bool) error {
+	if c.nc != nil {
+		c.nc.Close()
+	}
+	nc, err := nats.Connect(c.url,
+		nats.Name("heliobot-tg-bot"),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(30*time.Second),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			c.log.Warn("NATS connection lost", "error", err, "retry_interval", "30s")
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			c.log.Info("NATS connection restored", "server", nc.ConnectedUrl())
+		}),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("connect to NATS: %w", err)
+		if reconnecting {
+			c.log.Warn("NATS reconnect attempt failed", "error", err)
+		}
+		return fmt.Errorf("connect to NATS: %w", err)
 	}
 
 	js, err := nc.JetStream()
 	if err != nil {
 		nc.Close()
-		return nil, fmt.Errorf("create JetStream context: %w", err)
+		return fmt.Errorf("create JetStream context: %w", err)
 	}
 	if _, err := js.StreamInfo(streamName); err != nil {
 		if _, err := js.AddStream(&nats.StreamConfig{
@@ -67,7 +100,7 @@ func NewClient(url string) (*Client, error) {
 			Storage:  nats.FileStorage,
 		}); err != nil {
 			nc.Close()
-			return nil, fmt.Errorf("create STT stream: %w", err)
+			return fmt.Errorf("create STT stream: %w", err)
 		}
 	}
 
@@ -80,14 +113,33 @@ func NewClient(url string) (*Client, error) {
 		})
 		if err != nil {
 			nc.Close()
-			return nil, fmt.Errorf("create voice object store: %w", err)
+			return fmt.Errorf("create voice object store: %w", err)
 		}
 	}
-	return &Client{nc: nc, js: js, objects: objects}, nil
+	c.nc, c.js, c.objects = nc, js, objects
+	if c.handler != nil {
+		sub, err := c.subscribeResultsLocked(c.handler)
+		if err != nil {
+			nc.Close()
+			return err
+		}
+		c.sub = sub
+	}
+	if reconnecting {
+		c.log.Info("NATS reconnect attempt succeeded", "server", nc.ConnectedUrl())
+	}
+	return nil
 }
 
 // Enqueue stores audio in Object Store and publishes a durable transcription job.
 func (c *Client) Enqueue(ctx context.Context, audio io.Reader, chatID, messageID int64) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nc == nil || !c.nc.IsConnected() {
+		if err := c.connectLocked(true); err != nil {
+			return "", fmt.Errorf("reconnect to NATS: %w", err)
+		}
+	}
 	jobID := nuid.Next()
 	objectName := jobID + ".ogg"
 	if _, err := c.objects.Put(&nats.ObjectMeta{Name: objectName}, audio); err != nil {
@@ -106,6 +158,23 @@ func (c *Client) Enqueue(ctx context.Context, audio io.Reader, chatID, messageID
 
 // SubscribeResults invokes handler for each durable transcription result.
 func (c *Client) SubscribeResults(handler func(Result) error) (*nats.Subscription, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.handler = handler
+	if c.nc == nil || !c.nc.IsConnected() {
+		if err := c.connectLocked(true); err != nil {
+			return nil, fmt.Errorf("reconnect to NATS: %w", err)
+		}
+		return c.sub, nil
+	}
+	sub, err := c.subscribeResultsLocked(handler)
+	if err == nil {
+		c.sub = sub
+	}
+	return sub, err
+}
+
+func (c *Client) subscribeResultsLocked(handler func(Result) error) (*nats.Subscription, error) {
 	return c.js.Subscribe(resultsSubject, func(message *nats.Msg) {
 		var result Result
 		if err := json.Unmarshal(message.Data, &result); err != nil {
@@ -119,6 +188,11 @@ func (c *Client) SubscribeResults(handler func(Result) error) (*nats.Subscriptio
 
 // Close drains outstanding messages and closes the NATS connection.
 func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nc == nil {
+		return
+	}
 	_ = c.nc.Drain()
 	c.nc.Close()
 }

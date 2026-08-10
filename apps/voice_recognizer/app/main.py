@@ -21,6 +21,7 @@ if not logging.getLogger().handlers:
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("nats").setLevel(logging.CRITICAL)
 logger = logging.getLogger("voice_recognizer")
 
 
