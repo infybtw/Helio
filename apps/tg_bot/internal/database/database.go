@@ -98,6 +98,18 @@ type VoiceRecognitionSettings struct {
 	MaxDurationSeconds int    `json:"max_duration_seconds"`
 }
 
+// VoiceTranscription is a completed speech-to-text job and its timing metrics.
+type VoiceTranscription struct {
+	JobID                string
+	ChatID               int64
+	MessageID            int64
+	Transcript           string
+	Language             string
+	LanguageProbability  float64
+	TranscriptionSeconds float64
+	AudioDurationSeconds float64
+}
+
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
 	// TrackChat records a chat where the bot received a trusted Telegram update.
@@ -132,6 +144,7 @@ type Store interface {
 	IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error)
 	GetVoiceRecognitionSettings(ctx context.Context, chatID int64) (VoiceRecognitionSettings, error)
 	UpdateVoiceRecognitionSettings(ctx context.Context, settings VoiceRecognitionSettings) error
+	RecordVoiceTranscription(ctx context.Context, transcription VoiceTranscription) error
 	// Close releases database resources.
 	Close()
 }

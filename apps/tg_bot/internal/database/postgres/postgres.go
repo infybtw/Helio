@@ -173,6 +173,30 @@ func (p *Postgres) UpdateVoiceRecognitionSettings(ctx context.Context, settings 
 	return nil
 }
 
+// RecordVoiceTranscription stores a completed STT result and its performance metrics.
+func (p *Postgres) RecordVoiceTranscription(ctx context.Context, transcription database.VoiceTranscription) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO voice_transcriptions
+			(job_id, chat_id, message_id, transcript, language, language_probability, transcription_seconds, audio_duration_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (chat_id, message_id) DO UPDATE SET
+			job_id = EXCLUDED.job_id,
+			transcript = EXCLUDED.transcript,
+			language = EXCLUDED.language,
+			language_probability = EXCLUDED.language_probability,
+			transcription_seconds = EXCLUDED.transcription_seconds,
+			audio_duration_seconds = EXCLUDED.audio_duration_seconds,
+			created_at = now()`,
+		transcription.JobID, transcription.ChatID, transcription.MessageID, transcription.Transcript,
+		transcription.Language, transcription.LanguageProbability, transcription.TranscriptionSeconds,
+		transcription.AudioDurationSeconds,
+	)
+	if err != nil {
+		return fmt.Errorf("record voice transcription: %w", err)
+	}
+	return nil
+}
+
 // TrackChat records a chat where the bot received a trusted Telegram update.
 func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error {
 	_, err := p.pool.Exec(ctx,

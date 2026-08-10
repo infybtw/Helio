@@ -30,11 +30,14 @@ type Job struct {
 
 // Result is the transcription emitted by the voice recognizer.
 type Result struct {
-	JobID     string `json:"job_id"`
-	ChatID    int64  `json:"chat_id"`
-	MessageID int64  `json:"message_id"`
-	Text      string `json:"text"`
-	Language  string `json:"language"`
+	JobID                string  `json:"job_id"`
+	ChatID               int64   `json:"chat_id"`
+	MessageID            int64   `json:"message_id"`
+	Text                 string  `json:"text"`
+	Language             string  `json:"language"`
+	LanguageProbability  float64 `json:"language_probability"`
+	TranscriptionSeconds float64 `json:"transcription_seconds"`
+	AudioDurationSeconds float64 `json:"audio_duration_seconds"`
 }
 
 // Client stores voice files and dispatches transcription jobs through JetStream.

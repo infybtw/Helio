@@ -11,6 +11,7 @@ import (
 
 	"tg_bot/internal/auth"
 	"tg_bot/internal/config"
+	"tg_bot/internal/database"
 	"tg_bot/internal/database/postgres"
 	"tg_bot/internal/handlers"
 	"tg_bot/internal/httpserver"
@@ -84,6 +85,15 @@ func main() {
 	oidcClient := auth.NewOIDCClient(cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURI, cfg.OIDCScopes)
 	authHandler := handlers.NewAuth(oidcClient, stateMgr, sessions, db, client, cfg.DashboardOrigin, cfg.DashboardURL, logger)
 	if _, err := voices.SubscribeResults(func(result voicequeue.Result) error {
+		if err := db.RecordVoiceTranscription(ctx, database.VoiceTranscription{
+			JobID: result.JobID, ChatID: result.ChatID, MessageID: result.MessageID, Transcript: result.Text,
+			Language: result.Language, LanguageProbability: result.LanguageProbability,
+			TranscriptionSeconds: result.TranscriptionSeconds, AudioDurationSeconds: result.AudioDurationSeconds,
+		}); err != nil {
+			logger.Error("failed to record voice transcription", "error", err, "job_id", result.JobID)
+			return err
+		}
+		logger.Info("recorded voice transcription", "job_id", result.JobID, "transcription_seconds", result.TranscriptionSeconds)
 		if result.Text == "" {
 			return nil
 		}
