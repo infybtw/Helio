@@ -23,6 +23,7 @@ type Message struct {
 	Chat            *Chat           `json:"chat"`
 	Text            string          `json:"text,omitempty"`
 	Voice           *Voice          `json:"voice,omitempty"`
+	VideoNote       *VideoNote      `json:"video_note,omitempty"`
 	ReplyToMessage  *Message        `json:"reply_to_message,omitempty"`
 	Entities        []MessageEntity `json:"entities,omitempty"`
 }
@@ -33,6 +34,15 @@ type Voice struct {
 	FileUniqueID string `json:"file_unique_id"`
 	Duration     int    `json:"duration"`
 	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+// VideoNote is a round video message recorded by the Telegram client.
+type VideoNote struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	Length       int    `json:"length"`
+	Duration     int    `json:"duration"`
 	FileSize     int64  `json:"file_size,omitempty"`
 }
 

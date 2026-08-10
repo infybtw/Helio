@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from apps.voice_recognizer.app.main import Settings, create_app
+from apps.voice_recognizer.app.worker import VoiceJob
 
 
 class FakeSegment:
@@ -62,3 +63,11 @@ def test_stt_rejects_large_upload() -> None:
         response = client.post("/stt", files={"audio": ("voice.ogg", b"audio")})
 
     assert response.status_code == 413
+
+
+def test_voice_job_preserves_media_file_suffix() -> None:
+    legacy_job = VoiceJob(job_id="job", object_name="job.ogg", chat_id=1, message_id=2)
+    job = VoiceJob(job_id="job", object_name="job.mp4", chat_id=1, message_id=2, file_suffix=".mp4")
+
+    assert legacy_job.file_suffix == ".ogg"
+    assert job.file_suffix == ".mp4"

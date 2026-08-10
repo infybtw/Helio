@@ -29,6 +29,7 @@ class VoiceJob(BaseModel):
     chat_id: int
     message_id: int
     language: str | None = None
+    file_suffix: str = ".ogg"
 
 
 class TranscriptionResult(BaseModel):
@@ -120,7 +121,7 @@ async def start_worker(nats_url: str, model: Any, transcription_lock: asyncio.Lo
                 len(audio_bytes),
                 time.perf_counter() - object_started_at,
             )
-            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as audio_file:
+            with tempfile.NamedTemporaryFile(suffix=job.file_suffix, delete=False) as audio_file:
                 audio_path = Path(audio_file.name)
                 audio_file.write(audio_bytes)
             try:

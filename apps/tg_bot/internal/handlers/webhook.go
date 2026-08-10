@@ -86,7 +86,7 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.Message.Chat.Type,
 			"text", update.Message.Text,
 		)
-		w.transcribeVoice(ctx, update.Message)
+		w.transcribeMedia(ctx, update.Message)
 		commands.Dispatch(ctx, w.client, w.db, update.Message, w.log)
 	case update.EditedMessage != nil:
 		if update.EditedMessage.Chat == nil {
@@ -113,8 +113,9 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 	}
 }
 
-func (w *Webhook) transcribeVoice(ctx context.Context, msg *telegram.Message) {
-	if msg.Voice == nil || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
+func (w *Webhook) transcribeMedia(ctx context.Context, msg *telegram.Message) {
+	fileID, duration, fileSuffix, mediaType := transcriptionMedia(msg)
+	if fileID == "" || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
 		return
 	}
 	settings, err := w.db.GetVoiceRecognitionSettings(ctx, msg.Chat.ID)
@@ -122,23 +123,33 @@ func (w *Webhook) transcribeVoice(ctx context.Context, msg *telegram.Message) {
 		w.log.Error("failed to load voice recognition settings", "error", err, "chat_id", msg.Chat.ID)
 		return
 	}
-	if !settings.Enabled || msg.Voice.Duration > settings.MaxDurationSeconds || !w.canTranscribeVoice(ctx, msg, settings.Permission) {
+	if !settings.Enabled || duration > settings.MaxDurationSeconds || !w.canTranscribeVoice(ctx, msg, settings.Permission) {
 		return
 	}
 
-	audio, err := w.client.DownloadFile(ctx, msg.Voice.FileID)
+	media, err := w.client.DownloadFile(ctx, fileID)
 	if err != nil {
-		w.log.Error("failed to download voice message", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+		w.log.Error("failed to download media message", "error", err, "media_type", mediaType, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
 		return
 	}
-	defer audio.Close()
+	defer media.Close()
 
-	jobID, err := w.voices.Enqueue(ctx, audio, msg.Chat.ID, msg.MessageID)
+	jobID, err := w.voices.Enqueue(ctx, media, msg.Chat.ID, msg.MessageID, fileSuffix)
 	if err != nil {
-		w.log.Error("failed to enqueue voice message", "error", err, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+		w.log.Error("failed to enqueue media message", "error", err, "media_type", mediaType, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
 		return
 	}
-	w.log.Info("voice message enqueued", "job_id", jobID, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+	w.log.Info("media message enqueued", "job_id", jobID, "media_type", mediaType, "chat_id", msg.Chat.ID, "message_id", msg.MessageID)
+}
+
+func transcriptionMedia(msg *telegram.Message) (fileID string, duration int, fileSuffix, mediaType string) {
+	if msg.Voice != nil {
+		return msg.Voice.FileID, msg.Voice.Duration, ".ogg", "voice"
+	}
+	if msg.VideoNote != nil {
+		return msg.VideoNote.FileID, msg.VideoNote.Duration, ".mp4", "video_note"
+	}
+	return "", 0, "", ""
 }
 
 func (w *Webhook) canTranscribeVoice(ctx context.Context, msg *telegram.Message, permission string) bool {

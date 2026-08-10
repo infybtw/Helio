@@ -28,6 +28,7 @@ type Job struct {
 	ChatID     int64  `json:"chat_id"`
 	MessageID  int64  `json:"message_id"`
 	Language   string `json:"language,omitempty"`
+	FileSuffix string `json:"file_suffix,omitempty"`
 }
 
 // Result is the transcription emitted by the voice recognizer.
@@ -131,8 +132,8 @@ func (c *Client) connectLocked(reconnecting bool) error {
 	return nil
 }
 
-// Enqueue stores audio in Object Store and publishes a durable transcription job.
-func (c *Client) Enqueue(ctx context.Context, audio io.Reader, chatID, messageID int64) (string, error) {
+// Enqueue stores media in Object Store and publishes a durable transcription job.
+func (c *Client) Enqueue(ctx context.Context, media io.Reader, chatID, messageID int64, fileSuffix string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.nc == nil || !c.nc.IsConnected() {
@@ -141,12 +142,15 @@ func (c *Client) Enqueue(ctx context.Context, audio io.Reader, chatID, messageID
 		}
 	}
 	jobID := nuid.Next()
-	objectName := jobID + ".ogg"
-	if _, err := c.objects.Put(&nats.ObjectMeta{Name: objectName}, audio); err != nil {
-		return "", fmt.Errorf("store voice object: %w", err)
+	if fileSuffix == "" {
+		fileSuffix = ".ogg"
+	}
+	objectName := jobID + fileSuffix
+	if _, err := c.objects.Put(&nats.ObjectMeta{Name: objectName}, media); err != nil {
+		return "", fmt.Errorf("store media object: %w", err)
 	}
 
-	data, err := json.Marshal(Job{JobID: jobID, ObjectName: objectName, ChatID: chatID, MessageID: messageID})
+	data, err := json.Marshal(Job{JobID: jobID, ObjectName: objectName, ChatID: chatID, MessageID: messageID, FileSuffix: fileSuffix})
 	if err != nil {
 		return "", fmt.Errorf("encode transcription job: %w", err)
 	}
