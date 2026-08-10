@@ -17,7 +17,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://heliobot:heliobot@postgres:5432/heliobot?sslmode=disable
-      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      NATS_URL: nats://nats:4222
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -36,7 +36,7 @@ services:
       WHISPER_COMPUTE_TYPE: int8
       WHISPER_CPU_THREADS: 4
       STT_MAX_UPLOAD_BYTES: 26214400
-      NATS_URL: nats//nats:4222
+      NATS_URL: nats://nats:4222
     volumes:
       - whisper_models:/root/.cache/huggingface
     depends_on:

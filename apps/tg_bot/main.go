@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"tg_bot/internal/auth"
 	"tg_bot/internal/config"
@@ -93,11 +94,20 @@ func main() {
 			logger.Error("failed to record voice transcription", "error", err, "job_id", result.JobID)
 			return err
 		}
-		logger.Info("recorded voice transcription", "job_id", result.JobID, "transcription_seconds", result.TranscriptionSeconds)
+		logger.Info(
+			"recorded voice transcription",
+			"job_id", result.JobID,
+			"transcription_seconds", result.TranscriptionSeconds,
+			"text_length", utf8.RuneCountInString(result.Text),
+		)
 		if result.Text == "" {
 			return nil
 		}
-		if err := client.SendMessage(ctx, result.ChatID, result.Text, result.MessageID); err != nil {
+		reply := result.Text
+		if utf8.RuneCountInString(reply) > 4096 {
+			reply = "Расшифровка недоступна, слишком длинное сообщение"
+		}
+		if err := client.SendMessage(ctx, result.ChatID, reply, result.MessageID); err != nil {
 			logger.Error("failed to send voice transcription", "error", err, "job_id", result.JobID)
 			return err
 		}
