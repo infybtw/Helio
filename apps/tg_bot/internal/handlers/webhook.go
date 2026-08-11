@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -59,9 +60,12 @@ func (w *Webhook) Handle(c *gin.Context) {
 		"has_edited_channel_post", update.EditedChannelPost != nil,
 		"has_my_chat_member", update.MyChatMember != nil,
 	)
-	w.dispatch(c.Request.Context(), &update)
-
 	c.Status(http.StatusOK)
+	c.Writer.WriteHeaderNow()
+	if update.Message != nil {
+		go w.transcribeMedia(update.Message)
+	}
+	w.dispatch(c.Request.Context(), &update)
 }
 
 // dispatch routes the update to the appropriate command handler.
@@ -86,7 +90,6 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 			"chat_type", update.Message.Chat.Type,
 			"text", update.Message.Text,
 		)
-		w.transcribeMedia(ctx, update.Message)
 		commands.Dispatch(ctx, w.client, w.db, update.Message, w.log)
 	case update.EditedMessage != nil:
 		if update.EditedMessage.Chat == nil {
@@ -113,7 +116,10 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 	}
 }
 
-func (w *Webhook) transcribeMedia(ctx context.Context, msg *telegram.Message) {
+func (w *Webhook) transcribeMedia(msg *telegram.Message) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
 	fileID, duration, fileSuffix, mediaType := transcriptionMedia(msg)
 	if fileID == "" || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
 		return
