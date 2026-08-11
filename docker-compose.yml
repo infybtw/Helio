@@ -1,0 +1,105 @@
+services:
+  web:
+    image: ghcr.io/infybtw/helio-web:latest
+    env_file:
+      - .env
+    expose:
+      - "3000"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?TRAEFIK_NETWORK must be set in .env}
+      traefik.http.routers.heliobot-web.rule: Host(`${DOMAIN:?DOMAIN must be set in .env}`)
+      traefik.http.routers.heliobot-web.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.heliobot-web.tls: "true"
+      traefik.http.routers.heliobot-web.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?TRAEFIK_CERTRESOLVER must be set in .env}
+      traefik.http.routers.heliobot-web.priority: "1"
+      traefik.http.services.heliobot-web.loadbalancer.server.port: "3000"
+    restart: unless-stopped
+    networks:
+      - backend
+      - traefik
+
+  tg_bot:
+    image: ghcr.io/infybtw/helio-tg_bot:${HELIO_IMAGE_TAG:-latest}
+    env_file:
+      - .env
+    expose:
+      - "8080"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?TRAEFIK_NETWORK must be set in .env}
+      traefik.http.routers.heliobot-api.rule: Host(`${DOMAIN:?DOMAIN must be set in .env}`) && (PathPrefix(`/api`) || Path(`${WEBHOOK_PATH:?WEBHOOK_PATH must be set in .env}`))
+      traefik.http.routers.heliobot-api.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.heliobot-api.tls: "true"
+      traefik.http.routers.heliobot-api.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?TRAEFIK_CERTRESOLVER must be set in .env}
+      traefik.http.routers.heliobot-api.priority: "100"
+      traefik.http.services.heliobot-api.loadbalancer.server.port: "8080"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - backend
+      - traefik
+
+  voice_recognizer:
+    image: ghcr.io/infybtw/helio-voice_recognizer:${HELIO_IMAGE_TAG:-latest}
+    env_file:
+      - .env
+    volumes:
+      - whisper_models:/root/.cache/huggingface
+    depends_on:
+      nats:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - backend
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-sd", "/data"]
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+    networks:
+      - backend
+
+  migrations:
+    image: ghcr.io/infybtw/helio-migrations:${HELIO_IMAGE_TAG:-latest}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:17-alpine
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend
+
+networks:
+  backend:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:?TRAEFIK_NETWORK must be set in .env}
+
+volumes:
+  nats_data:
+  postgres_data:
+  whisper_models:

@@ -25,6 +25,9 @@ jobs:
           - service: migrations
             context: apps/migrations
             dockerfile: apps/migrations/Dockerfile
+          - service: voice_recognizer
+            context: apps/voice_recognizer
+            dockerfile: apps/voice_recognizer/Dockerfile
 
     env:
       REGISTRY: ghcr.io

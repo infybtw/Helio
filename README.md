@@ -55,11 +55,30 @@ Commands are used by replying to a message in a group. Admin commands can be use
 
    Or run everything with Docker Compose (starts Postgres, applies migrations, then the bot):
 
-   ```sh
-    docker compose -f docker-compose.dev.yml up --build
+    ```sh
+     docker compose -f docker-compose.dev.yml up --build
     ```
 
-4. Add the bot to your group and grant it admin rights (delete messages, ban users).
+### Production deployment
+
+The root `docker-compose.yml` is intended for an existing Traefik deployment.
+It exposes no ports itself: Traefik reaches the dashboard and bot over the
+external Docker network configured as `TRAEFIK_NETWORK` in `.env`.
+
+1. Copy `.env_example` to `.env` and replace every placeholder.
+2. Set `TRAEFIK_NETWORK` and `TRAEFIK_CERTRESOLVER` to the network and TLS
+   resolver used by the existing Traefik instance.
+3. Set `DOMAIN`, then use the matching HTTPS origin in `WEBHOOK_URL`,
+   `OIDC_REDIRECT_URI`, `DASHBOARD_ORIGIN`, and `NUXT_PUBLIC_API_BASE_URL`.
+   Keep `COOKIE_SECURE=true`.
+4. Start the stack:
+
+   ```sh
+   docker compose pull
+   docker compose up -d
+   ```
+
+5. Add the bot to your group and grant it admin rights (delete messages, ban users).
 
 ## Voice recognition
 
