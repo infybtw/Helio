@@ -2,20 +2,26 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"tg_bot/internal/auth"
 	"tg_bot/internal/config"
+	"tg_bot/internal/database"
 	"tg_bot/internal/database/postgres"
 	"tg_bot/internal/handlers"
 	"tg_bot/internal/httpserver"
 	"tg_bot/internal/logger"
 	"tg_bot/internal/telegram"
+	"tg_bot/internal/voicequeue"
 )
 
 func main() {
@@ -38,6 +44,12 @@ func main() {
 	}
 
 	client := telegram.NewClient(cfg.BotToken)
+	voices, err := voicequeue.NewClient(cfg.NATSURL, logger)
+	if err != nil {
+		logger.Error("failed to connect to NATS", "error", err)
+		os.Exit(1)
+	}
+	defer voices.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -76,7 +88,59 @@ func main() {
 	stateMgr := auth.NewOIDCStateManager(cfg.SessionSecret, 600, true, "none", cfg.CookieDomain)
 	oidcClient := auth.NewOIDCClient(cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURI, cfg.OIDCScopes)
 	authHandler := handlers.NewAuth(oidcClient, stateMgr, sessions, db, client, cfg.DashboardOrigin, cfg.DashboardURL, logger)
-	webhook := handlers.NewWebhook(client, db, cfg.WebhookSecret, logger)
+	if _, err := voices.SubscribeResults(func(result voicequeue.Result) error {
+		claimToken, err := newClaimToken()
+		if err != nil {
+			return err
+		}
+		claim, err := db.ClaimVoiceTranscriptionReply(ctx, database.VoiceTranscription{
+			JobID: result.JobID, ChatID: result.ChatID, MessageID: result.MessageID, Transcript: result.Text,
+			Language: result.Language, LanguageProbability: result.LanguageProbability,
+			TranscriptionSeconds: result.TranscriptionSeconds, AudioDurationSeconds: result.AudioDurationSeconds,
+		}, claimToken)
+		if err != nil {
+			logger.Error("failed to claim voice transcription reply", "error", err, "job_id", result.JobID)
+			return err
+		}
+		if claim.Sent {
+			logger.Info("voice transcription reply already sent", "job_id", result.JobID)
+			return nil
+		}
+		if !claim.Claimed {
+			return fmt.Errorf("voice transcription reply is being sent by another worker: %s", result.JobID)
+		}
+		logger.Info(
+			"claimed voice transcription reply",
+			"job_id", result.JobID,
+			"transcription_seconds", result.TranscriptionSeconds,
+			"text_length", utf8.RuneCountInString(result.Text),
+		)
+		if result.Text == "" {
+			return db.MarkVoiceTranscriptionReplySent(ctx, result.ChatID, result.MessageID, claimToken, 0)
+		}
+		reply := result.Text
+		if utf8.RuneCountInString(reply) > 4096 {
+			reply = "Расшифровка недоступна, слишком длинное сообщение"
+		}
+		sent, err := client.SendMessageResult(ctx, result.ChatID, reply, result.MessageID)
+		if err != nil {
+			logger.Error("failed to send voice transcription", "error", err, "job_id", result.JobID)
+			if releaseErr := db.ReleaseVoiceTranscriptionReply(ctx, result.ChatID, result.MessageID, claimToken); releaseErr != nil {
+				logger.Error("failed to release voice transcription reply", "error", releaseErr, "job_id", result.JobID)
+			}
+			return err
+		}
+		if err := db.MarkVoiceTranscriptionReplySent(ctx, result.ChatID, result.MessageID, claimToken, sent.MessageID); err != nil {
+			logger.Error("failed to record sent voice transcription", "error", err, "job_id", result.JobID)
+			return err
+		}
+		logger.Info("sent voice transcription", "job_id", result.JobID, "language", result.Language)
+		return nil
+	}); err != nil {
+		logger.Error("failed to subscribe to transcription results", "error", err)
+		os.Exit(1)
+	}
+	webhook := handlers.NewWebhook(client, voices, db, cfg.WebhookSecret, logger)
 	server := httpserver.New(
 		":"+cfg.Port,
 		cfg.WebhookPath,
@@ -103,10 +167,21 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "error", err)
 	}
+	if err := webhook.Shutdown(shutdownCtx); err != nil {
+		logger.Error("voice media shutdown error", "error", err)
+	}
 
 	if err := client.DeleteWebhook(context.Background(), telegram.DeleteWebhookParams{DropPendingUpdates: true}); err != nil {
 		logger.Error("failed to delete webhook", "error", err)
 	}
 
 	logger.Info("shutdown complete")
+}
+
+func newClaimToken() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate voice transcription claim token: %w", err)
+	}
+	return hex.EncodeToString(bytes), nil
 }

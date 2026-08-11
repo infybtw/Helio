@@ -68,6 +68,12 @@ interface ActivityPage {
   page: number
   per_page: number
 }
+interface VoiceRecognitionSettings {
+  chat_id: number
+  enabled: boolean
+  permission: 'user' | 'moderator'
+  max_duration_seconds: number
+}
 
 const config = ref<AuthConfig | null>(null)
 const session = ref<UserSession | null>(null)
@@ -76,12 +82,16 @@ const error = ref<string | null>(null)
 const dashboard = ref<DashboardData | null>(null)
 const availableChats = ref<DashboardChat[]>([])
 const apiBase = useRuntimeConfig().public.apiBaseUrl as string | undefined
-const baseURL = apiBase || ''
-type DashboardView = 'overview' | 'chats' | 'activity' | 'commands'
+const baseURL = apiBase
+  ? (/^https?:\/\//.test(apiBase) ? apiBase : `https://${apiBase}`).replace(/\/$/, '')
+  : ''
+type DashboardView = 'overview' | 'chats' | 'activity' | 'voice' | 'commands'
 type CommandCategory = 'custom' | 'built-in'
 const route = useRoute()
 const router = useRouter()
-const initialView: DashboardView = route.query.chat_id ? (route.query.view === 'activity' ? 'activity' : 'commands') : 'overview'
+const initialView: DashboardView = route.query.chat_id && (route.query.view === 'activity' || route.query.view === 'voice')
+  ? route.query.view
+  : route.query.chat_id ? 'commands' : 'overview'
 const activeView = ref<DashboardView>(initialView)
 const commandsExpanded = ref(initialView === 'commands')
 const commandCategory = ref<CommandCategory>('custom')
@@ -122,8 +132,14 @@ const activityType = ref<'all' | DashboardActivity['event_type']>('all')
 const activityPage = ref(1)
 const activityItems = ref<DashboardActivity[]>([])
 const activityTotal = ref(0)
+const voiceSettings = ref<VoiceRecognitionSettings | null>(null)
+const voiceSettingsLoading = ref(false)
+const voiceSettingsSaving = ref(false)
+const voiceSettingsError = ref<string | null>(null)
 let activityTimer: ReturnType<typeof setInterval> | undefined
 let selectedChatRequest = 0
+let voiceSettingsRequest = 0
+let builtInCommandsRequest = 0
 
 function navigateToView(view: DashboardView) {
   if (view === 'commands') {
@@ -137,6 +153,43 @@ function navigateToView(view: DashboardView) {
   router.replace({ query })
   if (view === 'activity' && session.value) {
     refreshActivity()
+  }
+  if (view === 'voice' && session.value) {
+    loadVoiceSettings()
+  }
+}
+
+async function loadVoiceSettings() {
+  if (!selectedChatID.value || voiceSettingsLoading.value) return
+  const chatID = selectedChatID.value
+  const request = ++voiceSettingsRequest
+  voiceSettingsLoading.value = true
+  voiceSettingsError.value = null
+  try {
+    const settings = await $fetch<VoiceRecognitionSettings>(`${baseURL}/api/dashboard/voice-recognition?chat_id=${chatID}`, { credentials: 'include' })
+    if (selectedChatID.value === chatID && request === voiceSettingsRequest) voiceSettings.value = settings
+  } catch {
+    if (request === voiceSettingsRequest) voiceSettingsError.value = 'Не удалось загрузить настройки распознавания.'
+  } finally {
+    if (request === voiceSettingsRequest) voiceSettingsLoading.value = false
+  }
+}
+
+async function saveVoiceSettings() {
+  if (!selectedChatID.value || !voiceSettings.value || voiceSettingsSaving.value) return
+  voiceSettingsSaving.value = true
+  voiceSettingsError.value = null
+  try {
+    voiceSettings.value = await $fetch<VoiceRecognitionSettings>(`${baseURL}/api/dashboard/voice-recognition?chat_id=${selectedChatID.value}`, {
+      method: 'PUT',
+      credentials: 'include',
+      body: voiceSettings.value
+    })
+    showToast('Настройки распознавания сохранены.')
+  } catch {
+    voiceSettingsError.value = 'Не удалось сохранить настройки. Проверь длительность и попробуй снова.'
+  } finally {
+    voiceSettingsSaving.value = false
   }
 }
 
@@ -153,15 +206,17 @@ function selectCommandCategory(category: CommandCategory) {
 
 async function loadBuiltInCommands() {
   if (!selectedChatID.value || builtInCommandsLoading.value) return
+  const chatID = selectedChatID.value
+  const request = ++builtInCommandsRequest
   builtInCommandsLoading.value = true
   builtInCommandsError.value = null
   try {
-    const data = await $fetch<{ commands: BuiltInCommand[] }>(`${baseURL}/api/dashboard/built-in-commands?chat_id=${selectedChatID.value}`, { credentials: 'include' })
-    builtInCommands.value = data.commands
+    const data = await $fetch<{ commands: BuiltInCommand[] }>(`${baseURL}/api/dashboard/built-in-commands?chat_id=${chatID}`, { credentials: 'include' })
+    if (selectedChatID.value === chatID && request === builtInCommandsRequest) builtInCommands.value = data.commands
   } catch {
-    builtInCommandsError.value = 'Не удалось загрузить встроенные команды.'
+    if (request === builtInCommandsRequest) builtInCommandsError.value = 'Не удалось загрузить встроенные команды.'
   } finally {
-    builtInCommandsLoading.value = false
+    if (request === builtInCommandsRequest) builtInCommandsLoading.value = false
   }
 }
 
@@ -255,6 +310,12 @@ function muteDurationToMinutes(value: string): string {
 }
 
 async function selectChat(chatID: number | null) {
+  voiceSettingsRequest++
+  builtInCommandsRequest++
+  voiceSettings.value = null
+  voiceSettingsLoading.value = false
+  voiceSettingsError.value = null
+  builtInCommandsLoading.value = false
   selectedChatID.value = chatID
   activeView.value = chatID ? 'commands' : 'overview'
   commandsExpanded.value = Boolean(chatID)
@@ -273,11 +334,14 @@ async function selectChat(chatID: number | null) {
 }
 
 watch(() => route.query.view, (view) => {
-  const nextView = route.query.chat_id ? (view === 'activity' ? 'activity' : 'commands') : 'overview'
+  const nextView = route.query.chat_id && (view === 'activity' || view === 'voice') ? view : route.query.chat_id ? 'commands' : 'overview'
   activeView.value = nextView
   if (nextView === 'commands') commandsExpanded.value = true
   if (nextView === 'activity' && session.value) {
     refreshActivity()
+  }
+  if (nextView === 'voice' && session.value) {
+    loadVoiceSettings()
   }
 })
 
@@ -416,9 +480,12 @@ async function fetchAuthState() {
          builtInCommandsError.value = null
         commandChatID.value = null
       }
-      if (activeView.value === 'activity') {
-        await refreshActivity()
-      }
+       if (activeView.value === 'activity') {
+         await refreshActivity()
+       }
+       if (activeView.value === 'voice') {
+         await loadVoiceSettings()
+       }
     }
   } catch {
     error.value = 'Не удалось загрузить дашборд. Попробуйте еще раз позже.'
@@ -626,10 +693,16 @@ onUnmounted(() => {
                <span class="min-w-0 truncate">{{ chat.name }}</span>
               </button>
               <template v-if="selectedChatID">
-                <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'activity' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('activity')">
-                  <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.05] text-[10px] font-bold">A</span>
-                  Activity
-                </button>
+                 <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'activity' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('activity')">
+                   <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.05] text-[10px] font-bold">A</span>
+                   Activity
+                 </button>
+                 <button type="button" class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'voice' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" @click="navigateToView('voice')">
+                   <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-400/10 text-violet-200">
+                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-4 w-4"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
+                   </span>
+                   Voice Recognition
+                 </button>
                 <div class="flex shrink-0 flex-col gap-1 lg:w-full">
                   <button type="button" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition lg:w-full" :class="activeView === 'commands' ? 'bg-amber-300/10 font-medium text-amber-200' : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200'" :aria-expanded="commandsExpanded" aria-controls="command-category-nav" @click="navigateToView('commands')">
                     <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.05] text-[10px] font-bold">C</span>
@@ -660,12 +733,14 @@ onUnmounted(() => {
                <p class="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-600">Command center</p>
               <h1 v-if="activeView === 'overview'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Good morning, {{ displayName }}.</h1>
                <h1 v-else-if="activeView === 'chats'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Your chats</h1>
-               <h1 v-else-if="activeView === 'activity'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Recent activity</h1>
-                <h1 v-else class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">{{ commandCategory === 'custom' ? 'Custom commands' : 'Built-In commands' }}</h1>
+                <h1 v-else-if="activeView === 'activity'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Recent activity</h1>
+                <h1 v-else-if="activeView === 'voice'" class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">Voice recognition</h1>
+                 <h1 v-else class="mt-3 text-4xl font-bold tracking-[-0.04em] sm:text-5xl">{{ commandCategory === 'custom' ? 'Custom commands' : 'Built-In commands' }}</h1>
               <p v-if="activeView === 'overview'" class="mt-3 max-w-xl text-zinc-500">Все важное о твоих чатах, командах и модерации в одном месте.</p>
               <p v-else-if="activeView === 'chats'" class="mt-3 max-w-xl text-zinc-500">Connected Telegram groups and their moderation status.</p>
-                <p v-else-if="activeView === 'activity'" class="mt-3 max-w-xl text-zinc-500">A complete log of moderation actions in your workspace.</p>
-               <p v-else class="mt-3 max-w-xl text-zinc-500">Команды и настройки группы {{ selectedChat?.name || '' }}.</p>
+                 <p v-else-if="activeView === 'activity'" class="mt-3 max-w-xl text-zinc-500">A complete log of moderation actions in your workspace.</p>
+                <p v-else-if="activeView === 'voice'" class="mt-3 max-w-xl text-zinc-500">Automatic transcription for voice messages in {{ selectedChat?.name || 'this group' }}.</p>
+                <p v-else class="mt-3 max-w-xl text-zinc-500">Команды и настройки группы {{ selectedChat?.name || '' }}.</p>
                 </div>
                 <button v-if="activeView === 'commands' && commandCategory === 'custom'" type="button" class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-amber-300 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-200" @click="openCreateCommand">
                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>
@@ -714,7 +789,7 @@ onUnmounted(() => {
               <div v-if="!chats.length" class="rounded-2xl border border-dashed border-white/[0.1] p-8 text-sm text-zinc-600 md:col-span-2 xl:col-span-3">No tracked chats yet.</div>
             </div>
 
-              <div v-else-if="activeView === 'activity'" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
+               <div v-else-if="activeView === 'activity'" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
                <div class="mb-4 flex items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
                  <div class="flex items-center gap-2 text-xs text-zinc-600"><span class="h-2 w-2 rounded-full bg-emerald-400"></span><span>Updated {{ activityAge }}</span></div>
                  <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-500 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" :disabled="refreshingActivity" @click="refreshActivity"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-4 w-4" :class="refreshingActivity ? 'animate-spin' : ''"><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4" /></svg>Refresh</button>
@@ -734,9 +809,50 @@ onUnmounted(() => {
                  <span>Page {{ activityPage }} of {{ activityPageCount }} · {{ activityTotal }} events</span>
                  <div class="flex gap-2"><button type="button" class="rounded-lg px-3 py-2 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40" :disabled="activityPage === 1 || refreshingActivity" @click="setActivityPage(activityPage - 1)">Previous</button><button type="button" class="rounded-lg px-3 py-2 transition hover:bg-white/[0.05] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40" :disabled="activityPage === activityPageCount || refreshingActivity" @click="setActivityPage(activityPage + 1)">Next</button></div>
                </div>
-              </div>
+               </div>
 
-               <div v-else-if="commandCategory === 'custom'" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
+                <div v-else-if="activeView === 'voice'" class="max-w-2xl rounded-2xl border border-white/[0.07] bg-[#111418] p-6 sm:p-8">
+                  <div class="border-b border-white/[0.06] pb-6">
+                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-violet-200/70">Group setting</p>
+                    <h2 class="mt-3 text-xl font-semibold">Automatic transcription</h2>
+                    <p class="mt-2 text-sm leading-6 text-zinc-500">Настройки применяются только к голосовым сообщениям в {{ selectedChat?.name || 'этой группе' }}.</p>
+                  </div>
+
+                  <p v-if="voiceSettingsError" class="mt-5 text-sm text-rose-300">{{ voiceSettingsError }}</p>
+                  <div v-else-if="voiceSettingsLoading || !voiceSettings" class="py-10 text-center text-sm text-zinc-500">Loading voice settings...</div>
+                  <form v-else class="mt-6 space-y-7" @submit.prevent="saveVoiceSettings">
+                    <label class="flex items-center justify-between gap-5 rounded-xl border border-white/[0.08] bg-white/[0.025] p-4">
+                      <span><span class="block text-sm font-medium text-zinc-200">Voice recognition</span><span class="mt-1 block text-xs leading-5 text-zinc-600">Отправлять расшифровку ответом на голосовое сообщение.</span></span>
+                      <button type="button" role="switch" :aria-checked="voiceSettings.enabled" class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors focus:outline-none focus:ring-2 focus:ring-violet-300/40" :class="voiceSettings.enabled ? 'bg-violet-400/80' : 'bg-zinc-700'" @click="voiceSettings.enabled = !voiceSettings.enabled"><span class="block h-4 w-4 rounded-full bg-white shadow-sm transition-transform" :class="voiceSettings.enabled ? 'translate-x-5' : 'translate-x-0'"></span></button>
+                    </label>
+
+                    <fieldset :disabled="!voiceSettings.enabled" class="space-y-6 disabled:opacity-45">
+                      <label class="block">
+                        <span class="text-sm font-medium text-zinc-200">Доступ к распознаванию</span>
+                        <span class="mt-1 block text-xs text-zinc-600">Чьи голосовые бот будет расшифровывать.</span>
+                        <select v-model="voiceSettings.permission" class="mt-3 w-full rounded-xl border border-white/[0.1] bg-[#0d0f13] px-3 py-3 text-sm text-zinc-200 outline-none focus:border-violet-300/50">
+                          <option value="user">Пользователи</option>
+                          <option value="moderator">Модераторы</option>
+                        </select>
+                      </label>
+
+                      <label class="block">
+                        <span class="text-sm font-medium text-zinc-200">Максимальная длительность</span>
+                        <span class="mt-1 block text-xs text-zinc-600">Голосовые длиннее лимита будут пропущены.</span>
+                        <div class="mt-3 flex overflow-hidden rounded-xl border border-white/[0.1] bg-[#0d0f13] focus-within:border-violet-300/50">
+                          <input v-model.number="voiceSettings.max_duration_seconds" type="number" min="1" max="3600" step="1" inputmode="numeric" class="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-zinc-200 outline-none">
+                          <span class="flex items-center border-l border-white/[0.1] px-3 text-sm text-zinc-500">секунд</span>
+                        </div>
+                      </label>
+                    </fieldset>
+
+                    <div class="flex justify-end border-t border-white/[0.06] pt-5">
+                      <button type="submit" :disabled="voiceSettingsSaving" class="rounded-xl bg-violet-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-violet-200 disabled:cursor-wait disabled:opacity-50">{{ voiceSettingsSaving ? 'Saving...' : 'Save settings' }}</button>
+                    </div>
+                  </form>
+                </div>
+
+                <div v-else-if="commandCategory === 'custom'" class="rounded-2xl border border-white/[0.07] bg-[#111418] p-6">
                 <div class="mb-2 flex items-center justify-between gap-4 text-xs text-zinc-600">
                   <span>{{ commands.length }} command{{ commands.length === 1 ? '' : 's' }}</span>
                   <span>Available to chat members</span>

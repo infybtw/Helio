@@ -55,3 +55,4 @@ air.log
 # Local config
 config.local.*
 *.local.json
+*.ogg

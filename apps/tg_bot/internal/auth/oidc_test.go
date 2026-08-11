@@ -2,6 +2,8 @@ package auth
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -81,10 +83,10 @@ func TestValidateIDToken(t *testing.T) {
 	// Temporarily override the JWKS URL by using a custom transport that intercepts the known URL.
 	httpClient := &http.Client{
 		Transport: &rewriteTransport{
-			base:      http.DefaultTransport,
-			jwksURL:   server.URL + "/jwks",
-			tokenURL:  server.URL + "/token",
-			authURL:   server.URL + "/auth",
+			base:     http.DefaultTransport,
+			jwksURL:  server.URL + "/jwks",
+			tokenURL: server.URL + "/token",
+			authURL:  server.URL + "/auth",
 		},
 	}
 
@@ -92,15 +94,15 @@ func TestValidateIDToken(t *testing.T) {
 
 	now := time.Now().Unix()
 	claims := map[string]any{
-		"iss":       telegramIssuer,
-		"aud":       "client-id",
-		"sub":       "1234567890",
-		"iat":       now,
-		"exp":       now + 3600,
-		"id":        987654321,
-		"name":      "John Doe",
-		"given_name": "John",
-		"family_name": "Doe",
+		"iss":                telegramIssuer,
+		"aud":                "client-id",
+		"sub":                "1234567890",
+		"iat":                now,
+		"exp":                now + 3600,
+		"id":                 987654321,
+		"name":               "John Doe",
+		"given_name":         "John",
+		"family_name":        "Doe",
 		"preferred_username": "johndoe",
 	}
 
@@ -171,15 +173,15 @@ func TestValidateIDTokenStringID(t *testing.T) {
 
 	now := time.Now().Unix()
 	claims := map[string]any{
-		"iss":       telegramIssuer,
-		"aud":       "client-id",
-		"sub":       "1234567890",
-		"iat":       now,
-		"exp":       now + 3600,
-		"id":        "987654321",
-		"name":      "John Doe",
-		"given_name": "John",
-		"family_name": "Doe",
+		"iss":                telegramIssuer,
+		"aud":                "client-id",
+		"sub":                "1234567890",
+		"iat":                now,
+		"exp":                now + 3600,
+		"id":                 "987654321",
+		"name":               "John Doe",
+		"given_name":         "John",
+		"family_name":        "Doe",
 		"preferred_username": "johndoe",
 	}
 
@@ -191,6 +193,35 @@ func TestValidateIDTokenStringID(t *testing.T) {
 	}
 	if user.ID != 987654321 {
 		t.Errorf("expected id 987654321, got %d", user.ID)
+	}
+}
+
+func TestVerifyES256(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ES256 key: %v", err)
+	}
+	signingInput := "header.payload"
+	hash := sha256.Sum256([]byte(signingInput))
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hash[:])
+	if err != nil {
+		t.Fatalf("sign ES256 payload: %v", err)
+	}
+	signature := make([]byte, 64)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+	key := &JWK{
+		Kty: "EC",
+		Crv: "P-256",
+		X:   base64.RawURLEncoding.EncodeToString(privateKey.X.FillBytes(make([]byte, 32))),
+		Y:   base64.RawURLEncoding.EncodeToString(privateKey.Y.FillBytes(make([]byte, 32))),
+	}
+
+	if err := (&OIDCClient{}).verifyES256(key, signingInput, signature); err != nil {
+		t.Fatalf("verify ES256 signature: %v", err)
+	}
+	if err := (&OIDCClient{}).verifyES256(key, signingInput, signature[:63]); err == nil {
+		t.Fatal("expected invalid ES256 signature length error")
 	}
 }
 

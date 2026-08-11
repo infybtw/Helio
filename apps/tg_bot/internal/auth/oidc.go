@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	telegramIssuer         = "https://oauth.telegram.org"
-	authorizationURL       = "https://oauth.telegram.org/auth"
-	tokenURL               = "https://oauth.telegram.org/token"
-	jwksURL                = "https://oauth.telegram.org/.well-known/jwks.json"
-	tokenRefreshInterval   = 1 * time.Hour
+	telegramIssuer       = "https://oauth.telegram.org"
+	authorizationURL     = "https://oauth.telegram.org/auth"
+	tokenURL             = "https://oauth.telegram.org/token"
+	jwksURL              = "https://oauth.telegram.org/.well-known/jwks.json"
+	tokenRefreshInterval = 1 * time.Hour
 )
 
 // OIDCUser holds the claims extracted from a Telegram ID token.
@@ -352,7 +352,10 @@ func (c *OIDCClient) verifyES256(key *JWK, signingInput string, signature []byte
 		return fmt.Errorf("parse ec key: %w", err)
 	}
 	hash := sha256.Sum256([]byte(signingInput))
-	if !ecdsa.VerifyASN1(pubKey, hash[:], signature) {
+	if len(signature) != 64 {
+		return fmt.Errorf("invalid es256 signature length")
+	}
+	if !ecdsa.Verify(pubKey, hash[:], new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:])) {
 		return fmt.Errorf("invalid es256 signature")
 	}
 	return nil

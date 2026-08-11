@@ -56,10 +56,27 @@ Commands are used by replying to a message in a group. Admin commands can be use
    Or run everything with Docker Compose (starts Postgres, applies migrations, then the bot):
 
    ```sh
-   docker compose -f docker-compose.dev.yml up --build
-   ```
+    docker compose -f docker-compose.dev.yml up --build
+    ```
 
 4. Add the bot to your group and grant it admin rights (delete messages, ban users).
+
+## Voice recognition
+
+`apps/voice_recognizer` is a standalone NATS JetStream worker backed by
+faster-whisper. It downloads the configured Whisper model when it starts and
+processes one `stt.jobs` message at a time. Configure `WHISPER_MODEL`,
+`WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`, and `WHISPER_CPU_THREADS` in `.env`.
+`WHISPER_CPU_THREADS` limits CTranslate2 to that many CPU threads per
+transcription; use `0` for its default.
+
+The Telegram bot transcribes new voice messages and video notes (round videos) in
+groups and supergroups, then replies to the source message with the recognized
+text. It stores each OGG or MP4 in JetStream Object Store, publishes a durable
+`stt.jobs` task, and receives the result through the durable `stt.results`
+consumer. Docker Compose runs NATS with JetStream enabled; use
+`NATS_URL=nats://localhost:4222` outside Compose. Disable the bot's privacy mode
+in BotFather so it receives ordinary group voice and video messages.
 
 ## Run locally
 
@@ -100,7 +117,7 @@ Prerequisites: Go, Bun, Docker (for Postgres), and a public HTTPS tunnel. Telegr
    ```sh
    cd apps/web
    bun install
-   NUXT_PUBLIC_API_BASE_URL=yourdomain.com bun run dev
+    NUXT_PUBLIC_API_BASE_URL=https://yourdomain.com bun run dev
    ```
 
    Open [http://localhost:3000](http://localhost:3000). The dashboard connects to `https://rp1.infybtw.dev` in this local setup.
@@ -118,6 +135,7 @@ apps/
 ├── migrations/                # database migration service (goose + pgx)
 │   ├── main.go                # applies embedded goose migrations (up/down/status/...)
 │   └── migrations/            # SQL migration files
+├── voice_recognizer/          # NATS/faster-whisper speech-to-text worker
 └── tg_bot/
     ├── main.go                # entrypoint: config, database, webhook registration, HTTP server
     └── internal/

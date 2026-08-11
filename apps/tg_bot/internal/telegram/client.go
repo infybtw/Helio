@@ -7,15 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const telegramAPIBase = "https://api.telegram.org/bot"
 
+const telegramFileBase = "https://api.telegram.org/file/bot"
+
 // Client is a thin HTTP client for the Telegram Bot API.
 type Client struct {
 	token   string
 	baseURL string
+	fileURL string
 	http    *http.Client
 }
 
@@ -24,8 +28,36 @@ func NewClient(token string) *Client {
 	return &Client{
 		token:   token,
 		baseURL: telegramAPIBase + token + "/",
+		fileURL: telegramFileBase + token + "/",
 		http:    &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// DownloadFile fetches a file by its Telegram file ID. The caller must close the body.
+func (c *Client) DownloadFile(ctx context.Context, fileID string) (io.ReadCloser, error) {
+	var file File
+	if err := c.call(ctx, "getFile", struct {
+		FileID string `json:"file_id"`
+	}{FileID: fileID}, &file); err != nil {
+		return nil, fmt.Errorf("get file metadata: %w", err)
+	}
+	if file.FilePath == "" {
+		return nil, fmt.Errorf("get file metadata: empty file path")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.fileURL+strings.TrimLeft(file.FilePath, "/"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create download request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download file: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download file: unexpected status %s", resp.Status)
+	}
+	return resp.Body, nil
 }
 
 // call invokes a Telegram Bot API method and decodes the response into dst.
@@ -109,11 +141,22 @@ type SendMessageParams struct {
 
 // SendMessage sends a text message to a chat.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, replyToMessageID int64) error {
-	return c.call(ctx, "sendMessage", SendMessageParams{
+	_, err := c.SendMessageResult(ctx, chatID, text, replyToMessageID)
+	return err
+}
+
+// SendMessageResult sends a text message and returns Telegram's created message.
+func (c *Client) SendMessageResult(ctx context.Context, chatID int64, text string, replyToMessageID int64) (*Message, error) {
+	var message Message
+	err := c.call(ctx, "sendMessage", SendMessageParams{
 		ChatID:           chatID,
 		Text:             text,
 		ReplyToMessageID: replyToMessageID,
-	}, nil)
+	}, &message)
+	if err != nil {
+		return nil, err
+	}
+	return &message, nil
 }
 
 // DeleteMessageParams contains parameters for the deleteMessage method.

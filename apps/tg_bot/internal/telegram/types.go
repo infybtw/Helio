@@ -22,8 +22,34 @@ type Message struct {
 	Date            int             `json:"date"`
 	Chat            *Chat           `json:"chat"`
 	Text            string          `json:"text,omitempty"`
+	Voice           *Voice          `json:"voice,omitempty"`
+	VideoNote       *VideoNote      `json:"video_note,omitempty"`
 	ReplyToMessage  *Message        `json:"reply_to_message,omitempty"`
 	Entities        []MessageEntity `json:"entities,omitempty"`
+}
+
+// Voice is an audio message recorded by the Telegram client.
+type Voice struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	Duration     int    `json:"duration"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+// VideoNote is a round video message recorded by the Telegram client.
+type VideoNote struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	Length       int    `json:"length"`
+	Duration     int    `json:"duration"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+// File contains metadata needed to download a Telegram-hosted file.
+type File struct {
+	FileID   string `json:"file_id"`
+	FilePath string `json:"file_path"`
 }
 
 // MessageEntity represents one special entity in a text message.

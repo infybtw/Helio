@@ -137,6 +137,124 @@ func (p *Postgres) IsBuiltInCommandEnabled(ctx context.Context, chatID int64, co
 	return enabled, nil
 }
 
+// GetVoiceRecognitionSettings returns the effective voice transcription settings.
+func (p *Postgres) GetVoiceRecognitionSettings(ctx context.Context, chatID int64) (database.VoiceRecognitionSettings, error) {
+	settings := database.VoiceRecognitionSettings{
+		ChatID: chatID, Enabled: true, Permission: "user", MaxDurationSeconds: 120,
+	}
+	err := p.pool.QueryRow(ctx, `
+		SELECT enabled, permission, max_duration_seconds
+		FROM voice_recognition_settings WHERE chat_id = $1`, chatID,
+	).Scan(&settings.Enabled, &settings.Permission, &settings.MaxDurationSeconds)
+	if err == pgx.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return settings, fmt.Errorf("get voice recognition settings: %w", err)
+	}
+	return settings, nil
+}
+
+// UpdateVoiceRecognitionSettings creates or updates a group's voice settings.
+func (p *Postgres) UpdateVoiceRecognitionSettings(ctx context.Context, settings database.VoiceRecognitionSettings) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO voice_recognition_settings (chat_id, enabled, permission, max_duration_seconds)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (chat_id) DO UPDATE SET
+			enabled = EXCLUDED.enabled,
+			permission = EXCLUDED.permission,
+			max_duration_seconds = EXCLUDED.max_duration_seconds,
+			updated_at = now()`,
+		settings.ChatID, settings.Enabled, settings.Permission, settings.MaxDurationSeconds,
+	)
+	if err != nil {
+		return fmt.Errorf("update voice recognition settings: %w", err)
+	}
+	return nil
+}
+
+// ClaimVoiceTranscriptionReply stores a result and atomically claims its Telegram reply.
+func (p *Postgres) ClaimVoiceTranscriptionReply(ctx context.Context, transcription database.VoiceTranscription, claimToken string) (database.VoiceTranscriptionReplyClaim, error) {
+	claim := database.VoiceTranscriptionReplyClaim{}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return claim, fmt.Errorf("begin voice transcription reply claim: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO voice_transcriptions
+			(job_id, chat_id, message_id, transcript, language, language_probability, transcription_seconds, audio_duration_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (chat_id, message_id) DO UPDATE SET
+			job_id = EXCLUDED.job_id,
+			transcript = EXCLUDED.transcript,
+			language = EXCLUDED.language,
+			language_probability = EXCLUDED.language_probability,
+			transcription_seconds = EXCLUDED.transcription_seconds,
+			audio_duration_seconds = EXCLUDED.audio_duration_seconds,
+			created_at = now()`,
+		transcription.JobID, transcription.ChatID, transcription.MessageID, transcription.Transcript,
+		transcription.Language, transcription.LanguageProbability, transcription.TranscriptionSeconds,
+		transcription.AudioDurationSeconds,
+	)
+	if err != nil {
+		return claim, fmt.Errorf("store voice transcription: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE voice_transcriptions
+		SET reply_status = 'sending', reply_claim_token = $3, reply_claimed_at = now()
+		WHERE chat_id = $1 AND message_id = $2
+		  AND (reply_status = 'pending' OR (reply_status = 'sending' AND reply_claimed_at < now() - interval '5 minutes'))`,
+		transcription.ChatID, transcription.MessageID, claimToken,
+	)
+	if err != nil {
+		return claim, fmt.Errorf("claim voice transcription reply: %w", err)
+	}
+	claim.Claimed = tag.RowsAffected() == 1
+	if !claim.Claimed {
+		if err := tx.QueryRow(ctx, `SELECT reply_status = 'sent' FROM voice_transcriptions WHERE chat_id = $1 AND message_id = $2`, transcription.ChatID, transcription.MessageID).Scan(&claim.Sent); err != nil {
+			return claim, fmt.Errorf("read voice transcription reply status: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return claim, fmt.Errorf("commit voice transcription reply claim: %w", err)
+	}
+	return claim, nil
+}
+
+// MarkVoiceTranscriptionReplySent records the Telegram reply created by this claim.
+func (p *Postgres) MarkVoiceTranscriptionReplySent(ctx context.Context, chatID, messageID int64, claimToken string, replyMessageID int64) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE voice_transcriptions
+		SET reply_status = 'sent', reply_message_id = NULLIF($4, 0), reply_claim_token = NULL, reply_claimed_at = NULL
+		WHERE chat_id = $1 AND message_id = $2 AND reply_status = 'sending' AND reply_claim_token = $3`,
+		chatID, messageID, claimToken, replyMessageID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark voice transcription reply sent: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("mark voice transcription reply sent: claim no longer owned")
+	}
+	return nil
+}
+
+// ReleaseVoiceTranscriptionReply makes a failed Telegram reply available for retry.
+func (p *Postgres) ReleaseVoiceTranscriptionReply(ctx context.Context, chatID, messageID int64, claimToken string) error {
+	_, err := p.pool.Exec(ctx, `
+		UPDATE voice_transcriptions
+		SET reply_status = 'pending', reply_claim_token = NULL, reply_claimed_at = NULL
+		WHERE chat_id = $1 AND message_id = $2 AND reply_status = 'sending' AND reply_claim_token = $3`,
+		chatID, messageID, claimToken,
+	)
+	if err != nil {
+		return fmt.Errorf("release voice transcription reply: %w", err)
+	}
+	return nil
+}
+
 // TrackChat records a chat where the bot received a trusted Telegram update.
 func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error {
 	_, err := p.pool.Exec(ctx,

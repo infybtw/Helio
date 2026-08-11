@@ -90,6 +90,32 @@ type BuiltInCommandSetting struct {
 	ReplyMessage string `json:"reply_message"`
 }
 
+// VoiceRecognitionSettings controls transcription for one group.
+type VoiceRecognitionSettings struct {
+	ChatID             int64  `json:"chat_id"`
+	Enabled            bool   `json:"enabled"`
+	Permission         string `json:"permission"`
+	MaxDurationSeconds int    `json:"max_duration_seconds"`
+}
+
+// VoiceTranscription is a completed speech-to-text job and its timing metrics.
+type VoiceTranscription struct {
+	JobID                string
+	ChatID               int64
+	MessageID            int64
+	Transcript           string
+	Language             string
+	LanguageProbability  float64
+	TranscriptionSeconds float64
+	AudioDurationSeconds float64
+}
+
+// VoiceTranscriptionReplyClaim reports whether this delivery owns the Telegram reply.
+type VoiceTranscriptionReplyClaim struct {
+	Claimed bool
+	Sent    bool
+}
+
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
 	// TrackChat records a chat where the bot received a trusted Telegram update.
@@ -122,6 +148,11 @@ type Store interface {
 	ResetBuiltInCommandSettings(ctx context.Context, chatID int64) error
 	GetBuiltInCommandSetting(ctx context.Context, chatID int64, command string) (BuiltInCommandSetting, bool, error)
 	IsBuiltInCommandEnabled(ctx context.Context, chatID int64, command string) (bool, error)
+	GetVoiceRecognitionSettings(ctx context.Context, chatID int64) (VoiceRecognitionSettings, error)
+	UpdateVoiceRecognitionSettings(ctx context.Context, settings VoiceRecognitionSettings) error
+	ClaimVoiceTranscriptionReply(ctx context.Context, transcription VoiceTranscription, claimToken string) (VoiceTranscriptionReplyClaim, error)
+	MarkVoiceTranscriptionReplySent(ctx context.Context, chatID, messageID int64, claimToken string, replyMessageID int64) error
+	ReleaseVoiceTranscriptionReply(ctx context.Context, chatID, messageID int64, claimToken string) error
 	// Close releases database resources.
 	Close()
 }
