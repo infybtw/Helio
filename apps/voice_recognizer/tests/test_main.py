@@ -1,7 +1,7 @@
-from fastapi.testclient import TestClient
+from dataclasses import asdict
 
-from apps.voice_recognizer.app.main import Settings, create_app
 from apps.voice_recognizer.app import worker
+from apps.voice_recognizer.app.main import transcribe
 from apps.voice_recognizer.app.worker import VoiceJob
 
 
@@ -26,44 +26,16 @@ class FakeModel:
         return iter([FakeSegment(0.0, 1.5, " Привет, мир! ")]), FakeInfo()
 
 
-def create_test_client(max_upload_bytes: int = 1024) -> TestClient:
-    app = create_app(
-        Settings(max_upload_bytes=max_upload_bytes, nats_url=""),
-        model_loader=lambda _settings: FakeModel(),
-    )
-    return TestClient(app)
+def test_transcribe_returns_transcription(tmp_path) -> None:
+    result = transcribe(FakeModel(), tmp_path / "voice.ogg", "ru")
 
-
-def test_health_reports_ready() -> None:
-    with create_test_client() as client:
-        response = client.get("/health")
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-
-
-def test_stt_returns_transcription() -> None:
-    with create_test_client() as client:
-        response = client.post(
-            "/stt?language=ru",
-            files={"audio": ("voice.ogg", b"audio", "audio/ogg")},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {
+    assert asdict(result) == {
         "text": "Привет, мир!",
         "language": "ru",
         "language_probability": 0.99,
         "duration": 1.5,
         "segments": [{"start": 0.0, "end": 1.5, "text": "Привет, мир!"}],
     }
-
-
-def test_stt_rejects_large_upload() -> None:
-    with create_test_client(max_upload_bytes=3) as client:
-        response = client.post("/stt", files={"audio": ("voice.ogg", b"audio")})
-
-    assert response.status_code == 413
 
 
 def test_voice_job_preserves_media_file_suffix() -> None:
@@ -74,7 +46,7 @@ def test_voice_job_preserves_media_file_suffix() -> None:
     assert job.file_suffix == ".mp4"
 
 
-def test_worker_consumer_extends_long_running_jobs() -> None:
+def test_worker_consumer_configuration() -> None:
     config = worker.worker_consumer_config()
 
     assert config.durable_name == worker.WORKER_DURABLE

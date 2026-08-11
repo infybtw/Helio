@@ -63,24 +63,12 @@ Commands are used by replying to a message in a group. Admin commands can be use
 
 ## Voice recognition
 
-`apps/voice_recognizer` is a standalone FastAPI service backed by faster-whisper.
-Docker Compose exposes it at `http://localhost:8000` and downloads the configured
-Whisper model when the service starts.
-
-| Endpoint | Description |
-|---|---|
-| `GET /health` | Returns `{"status":"ok"}` after the model is loaded |
-| `POST /stt` | Transcribes `multipart/form-data` field `audio`; optional `language` query parameter |
-
-```sh
-curl -F 'audio=@voice.ogg' 'http://localhost:8000/stt?language=ru'
-```
-
-The response includes the complete `text`, detected `language`, confidence,
-audio `duration`, and timestamped `segments`. Configure `WHISPER_MODEL`,
-`WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`, `WHISPER_CPU_THREADS`, and
-`STT_MAX_UPLOAD_BYTES` in `.env`. `WHISPER_CPU_THREADS` limits CTranslate2
-to that many CPU threads per transcription; use `0` for its default.
+`apps/voice_recognizer` is a standalone NATS JetStream worker backed by
+faster-whisper. It downloads the configured Whisper model when it starts and
+processes one `stt.jobs` message at a time. Configure `WHISPER_MODEL`,
+`WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`, and `WHISPER_CPU_THREADS` in `.env`.
+`WHISPER_CPU_THREADS` limits CTranslate2 to that many CPU threads per
+transcription; use `0` for its default.
 
 The Telegram bot transcribes new voice messages and video notes (round videos) in
 groups and supergroups, then replies to the source message with the recognized
@@ -147,7 +135,7 @@ apps/
 ├── migrations/                # database migration service (goose + pgx)
 │   ├── main.go                # applies embedded goose migrations (up/down/status/...)
 │   └── migrations/            # SQL migration files
-├── voice_recognizer/          # FastAPI/faster-whisper speech-to-text service
+├── voice_recognizer/          # NATS/faster-whisper speech-to-text worker
 └── tg_bot/
     ├── main.go                # entrypoint: config, database, webhook registration, HTTP server
     └── internal/

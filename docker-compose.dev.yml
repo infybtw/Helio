@@ -28,14 +28,11 @@ services:
   voice_recognizer:
     build:
       context: ./apps/voice_recognizer
-    ports:
-      - "8000:8000"
     environment:
       WHISPER_MODEL: small
       WHISPER_DEVICE: cpu
       WHISPER_COMPUTE_TYPE: int8
       WHISPER_CPU_THREADS: 4
-      STT_MAX_UPLOAD_BYTES: 26214400
       NATS_URL: nats://nats:4222
     volumes:
       - whisper_models:/root/.cache/huggingface
