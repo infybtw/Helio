@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import asdict
 
 from apps.voice_recognizer.app import worker
@@ -54,3 +55,31 @@ def test_worker_consumer_configuration() -> None:
     assert config.ack_wait == worker.ACK_WAIT_SECONDS
     assert config.backoff[0] == worker.ACK_WAIT_SECONDS
     assert config.max_deliver == 5
+
+
+def test_keep_message_alive_resets_ack_deadline() -> None:
+    class FakeMessage:
+        def __init__(self) -> None:
+            self.in_progress_called = asyncio.Event()
+
+        async def in_progress(self) -> None:
+            self.in_progress_called.set()
+
+    async def run() -> None:
+        message = FakeMessage()
+        task = asyncio.create_task(worker.keep_message_alive(message))
+        try:
+            await asyncio.wait_for(message.in_progress_called.wait(), timeout=0.1)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    original_interval = worker.HEARTBEAT_INTERVAL_SECONDS
+    worker.HEARTBEAT_INTERVAL_SECONDS = 0.01
+    try:
+        asyncio.run(run())
+    finally:
+        worker.HEARTBEAT_INTERVAL_SECONDS = original_interval

@@ -46,3 +46,16 @@ func TestTranscriptionMedia(t *testing.T) {
 		})
 	}
 }
+
+func TestSafeRedirect(t *testing.T) {
+	authHandler := &Auth{dashURL: "https://dashboard.example.com"}
+
+	for _, target := range []string{"//attacker.example", "https://attacker.example", "\\attacker.example", "dashboard"} {
+		if got := authHandler.safeRedirect(target); got != authHandler.dashURL {
+			t.Errorf("safeRedirect(%q) = %q, want dashboard URL", target, got)
+		}
+	}
+	if got := authHandler.safeRedirect("/dashboard?view=voice"); got != "/dashboard?view=voice" {
+		t.Errorf("safeRedirect() = %q, want local dashboard path", got)
+	}
+}

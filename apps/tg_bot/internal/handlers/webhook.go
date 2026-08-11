@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,8 @@ import (
 
 const secretTokenHeader = "X-Telegram-Bot-Api-Secret-Token"
 
+const mediaQueueSize = 32
+
 // Webhook processes incoming Telegram webhook updates.
 type Webhook struct {
 	client *telegram.Client
@@ -24,17 +27,30 @@ type Webhook struct {
 	db     database.Store
 	secret string
 	log    *slog.Logger
+
+	mediaCtx    context.Context
+	mediaCancel context.CancelFunc
+	mediaJobs   chan *telegram.Message
+	mediaDone   chan struct{}
+	shutdown    sync.Once
 }
 
 // NewWebhook creates a new webhook handler.
 func NewWebhook(client *telegram.Client, voices *voicequeue.Client, st database.Store, secret string, log *slog.Logger) *Webhook {
-	return &Webhook{
-		client: client,
-		voices: voices,
-		db:     st,
-		secret: secret,
-		log:    log,
+	mediaCtx, mediaCancel := context.WithCancel(context.Background())
+	w := &Webhook{
+		client:      client,
+		voices:      voices,
+		db:          st,
+		secret:      secret,
+		log:         log,
+		mediaCtx:    mediaCtx,
+		mediaCancel: mediaCancel,
+		mediaJobs:   make(chan *telegram.Message, mediaQueueSize),
+		mediaDone:   make(chan struct{}),
 	}
+	go w.processMedia()
+	return w
 }
 
 // Handle is the Gin handler for Telegram webhook requests.
@@ -63,7 +79,11 @@ func (w *Webhook) Handle(c *gin.Context) {
 	c.Status(http.StatusOK)
 	c.Writer.WriteHeaderNow()
 	if update.Message != nil {
-		go w.transcribeMedia(update.Message)
+		select {
+		case w.mediaJobs <- update.Message:
+		default:
+			w.log.Error("voice media queue is full", "message_id", update.Message.MessageID)
+		}
 	}
 	w.dispatch(c.Request.Context(), &update)
 }
@@ -116,12 +136,35 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 	}
 }
 
-func (w *Webhook) transcribeMedia(msg *telegram.Message) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+func (w *Webhook) processMedia() {
+	defer close(w.mediaDone)
+	for msg := range w.mediaJobs {
+		w.transcribeMedia(w.mediaCtx, msg)
+	}
+}
+
+// Shutdown stops intake and waits for the queued media work to finish.
+func (w *Webhook) Shutdown(ctx context.Context) error {
+	var shutdownErr error
+	w.shutdown.Do(func() {
+		close(w.mediaJobs)
+		select {
+		case <-w.mediaDone:
+		case <-ctx.Done():
+			w.mediaCancel()
+			<-w.mediaDone
+			shutdownErr = ctx.Err()
+		}
+	})
+	return shutdownErr
+}
+
+func (w *Webhook) transcribeMedia(parent context.Context, msg *telegram.Message) {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 
 	fileID, duration, fileSuffix, mediaType := transcriptionMedia(msg)
-	if fileID == "" || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
+	if msg.Chat == nil || fileID == "" || (msg.Chat.Type != "group" && msg.Chat.Type != "supergroup") {
 		return
 	}
 	settings, err := w.db.GetVoiceRecognitionSettings(ctx, msg.Chat.ID)

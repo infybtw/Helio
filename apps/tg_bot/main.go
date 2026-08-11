@@ -167,6 +167,9 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "error", err)
 	}
+	if err := webhook.Shutdown(shutdownCtx); err != nil {
+		logger.Error("voice media shutdown error", "error", err)
+	}
 
 	if err := client.DeleteWebhook(context.Background(), telegram.DeleteWebhookParams{DropPendingUpdates: true}); err != nil {
 		logger.Error("failed to delete webhook", "error", err)

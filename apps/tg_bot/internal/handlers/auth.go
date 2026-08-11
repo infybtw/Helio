@@ -773,7 +773,7 @@ func (a *Auth) safeRedirect(target string) string {
 	if err != nil {
 		return a.dashURL
 	}
-	if u.IsAbs() {
+	if u.IsAbs() || u.Host != "" || !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.Contains(target, "\\") {
 		return a.dashURL
 	}
 	return target

@@ -138,6 +138,8 @@ const voiceSettingsSaving = ref(false)
 const voiceSettingsError = ref<string | null>(null)
 let activityTimer: ReturnType<typeof setInterval> | undefined
 let selectedChatRequest = 0
+let voiceSettingsRequest = 0
+let builtInCommandsRequest = 0
 
 function navigateToView(view: DashboardView) {
   if (view === 'commands') {
@@ -159,14 +161,17 @@ function navigateToView(view: DashboardView) {
 
 async function loadVoiceSettings() {
   if (!selectedChatID.value || voiceSettingsLoading.value) return
+  const chatID = selectedChatID.value
+  const request = ++voiceSettingsRequest
   voiceSettingsLoading.value = true
   voiceSettingsError.value = null
   try {
-    voiceSettings.value = await $fetch<VoiceRecognitionSettings>(`${baseURL}/api/dashboard/voice-recognition?chat_id=${selectedChatID.value}`, { credentials: 'include' })
+    const settings = await $fetch<VoiceRecognitionSettings>(`${baseURL}/api/dashboard/voice-recognition?chat_id=${chatID}`, { credentials: 'include' })
+    if (selectedChatID.value === chatID && request === voiceSettingsRequest) voiceSettings.value = settings
   } catch {
-    voiceSettingsError.value = 'Не удалось загрузить настройки распознавания.'
+    if (request === voiceSettingsRequest) voiceSettingsError.value = 'Не удалось загрузить настройки распознавания.'
   } finally {
-    voiceSettingsLoading.value = false
+    if (request === voiceSettingsRequest) voiceSettingsLoading.value = false
   }
 }
 
@@ -201,15 +206,17 @@ function selectCommandCategory(category: CommandCategory) {
 
 async function loadBuiltInCommands() {
   if (!selectedChatID.value || builtInCommandsLoading.value) return
+  const chatID = selectedChatID.value
+  const request = ++builtInCommandsRequest
   builtInCommandsLoading.value = true
   builtInCommandsError.value = null
   try {
-    const data = await $fetch<{ commands: BuiltInCommand[] }>(`${baseURL}/api/dashboard/built-in-commands?chat_id=${selectedChatID.value}`, { credentials: 'include' })
-    builtInCommands.value = data.commands
+    const data = await $fetch<{ commands: BuiltInCommand[] }>(`${baseURL}/api/dashboard/built-in-commands?chat_id=${chatID}`, { credentials: 'include' })
+    if (selectedChatID.value === chatID && request === builtInCommandsRequest) builtInCommands.value = data.commands
   } catch {
-    builtInCommandsError.value = 'Не удалось загрузить встроенные команды.'
+    if (request === builtInCommandsRequest) builtInCommandsError.value = 'Не удалось загрузить встроенные команды.'
   } finally {
-    builtInCommandsLoading.value = false
+    if (request === builtInCommandsRequest) builtInCommandsLoading.value = false
   }
 }
 
@@ -303,6 +310,12 @@ function muteDurationToMinutes(value: string): string {
 }
 
 async function selectChat(chatID: number | null) {
+  voiceSettingsRequest++
+  builtInCommandsRequest++
+  voiceSettings.value = null
+  voiceSettingsLoading.value = false
+  voiceSettingsError.value = null
+  builtInCommandsLoading.value = false
   selectedChatID.value = chatID
   activeView.value = chatID ? 'commands' : 'overview'
   commandsExpanded.value = Boolean(chatID)
