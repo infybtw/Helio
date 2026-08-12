@@ -663,6 +663,27 @@ onUnmounted(() => {
       </div>
     </template>
 
+    <template v-else-if="!chats.length">
+      <div class="flex min-h-screen items-center justify-center px-6">
+        <div class="w-full max-w-md text-center">
+          <div class="relative mx-auto mb-8 inline-flex">
+            <div class="absolute inset-0 rounded-2xl bg-amber-400/20 blur-xl"></div>
+            <div class="relative flex h-20 w-20 items-center justify-center rounded-2xl bg-amber-400/10 ring-1 ring-amber-400/30">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-10 w-10 text-amber-400"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+            </div>
+          </div>
+          <h1 class="text-3xl font-bold tracking-tight">У вас пока нет групп, где работает <span class="bg-gradient-to-r from-amber-300 to-orange-400 bg-clip-text text-transparent">Helio</span></h1>
+          <p class="mt-4 leading-7 text-zinc-400">Дашборд доступен владельцам групп, в которые добавлен бот. Добавьте его в свою группу — и возвращайтесь.</p>
+          <p class="mt-8 text-sm font-medium uppercase tracking-wider text-zinc-500">Добавьте его тут</p>
+          <a href="https://t.me/Helio_robot" target="_blank" rel="noopener" class="mt-4 inline-flex items-center gap-2.5 rounded-xl bg-sky-500 px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:bg-sky-400">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" /></svg>
+            Открыть @Helio_robot
+          </a>
+          <button type="button" class="mt-8 block w-full text-sm text-zinc-600 transition hover:text-zinc-300" @click="logout">Выйти из аккаунта</button>
+        </div>
+      </div>
+    </template>
+
     <template v-else>
       <div class="min-h-screen lg:flex">
         <aside class="border-b border-white/[0.07] bg-[#0f1115] lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:border-b-0 lg:border-r">

@@ -1,13 +1,11 @@
 package handlers
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -112,18 +110,6 @@ func (a *Auth) OIDCCallback(c *gin.Context) {
 		return
 	}
 
-	isOwner, err := a.isTrackedChatOwner(c.Request.Context(), user.ID)
-	if err != nil {
-		a.log.Error("failed to verify dashboard authorization", "error", err, "user_id", user.ID)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify dashboard authorization"})
-		return
-	}
-	if !isOwner {
-		a.log.Warn("telegram user is not a group owner", "user_id", user.ID)
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "dashboard access requires group ownership"})
-		return
-	}
-
 	if err := a.sessions.IssueCookie(c.Writer, &auth.TelegramUser{
 		ID:        user.ID,
 		FirstName: user.GivenName,
@@ -143,29 +129,6 @@ func (a *Auth) OIDCCallback(c *gin.Context) {
 	c.Redirect(http.StatusFound, callbackURL)
 }
 
-func (a *Auth) isTrackedChatOwner(parent context.Context, userID int64) (bool, error) {
-	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
-	defer cancel()
-
-	chatIDs, err := a.db.ListTrackedChatIDs(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, chatID := range chatIDs {
-		member, err := a.client.GetChatMember(ctx, chatID, userID)
-		if err != nil {
-			continue
-		}
-		if member.Status == "creator" {
-			return true, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-	}
-	return false, nil
-}
-
 // Logout clears the session cookie.
 func (a *Auth) Logout(c *gin.Context) {
 	a.sessions.ClearCookie(c.Writer)
@@ -177,14 +140,6 @@ func (a *Auth) Me(c *gin.Context) {
 	session, err := a.sessions.FromRequest(c.Request)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-	if ok, err := a.isTrackedChatOwner(c.Request.Context(), session.UserID); err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify dashboard authorization"})
-		return
-	} else if !ok {
-		a.sessions.ClearCookie(c.Writer)
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "dashboard access requires group ownership"})
 		return
 	}
 	c.JSON(http.StatusOK, session)
@@ -736,14 +691,6 @@ func (a *Auth) RequireAuth() gin.HandlerFunc {
 		session, err := a.sessions.FromRequest(c.Request)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
-		if ok, err := a.isTrackedChatOwner(c.Request.Context(), session.UserID); err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify dashboard authorization"})
-			return
-		} else if !ok {
-			a.sessions.ClearCookie(c.Writer)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "dashboard access requires group ownership"})
 			return
 		}
 		c.Set("session", session)
