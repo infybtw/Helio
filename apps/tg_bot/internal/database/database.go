@@ -118,8 +118,10 @@ type VoiceTranscriptionReplyClaim struct {
 
 // Store is the abstract database interface. Implementations hide all SQL.
 type Store interface {
-	// TrackChat records a chat where the bot received a trusted Telegram update.
+	// TrackChat records a chat the bot has been added to.
 	TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error
+	// UntrackChat removes a chat the bot is no longer a member of.
+	UntrackChat(ctx context.Context, chatID int64) error
 	// RecordMessage stores an incoming message for later moderation history.
 	RecordMessage(ctx context.Context, message MessageRecord) error
 	// RecordAction stores a successful action performed by the bot.

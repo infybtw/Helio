@@ -255,7 +255,7 @@ func (p *Postgres) ReleaseVoiceTranscriptionReply(ctx context.Context, chatID, m
 	return nil
 }
 
-// TrackChat records a chat where the bot received a trusted Telegram update.
+// TrackChat records a chat the bot has been added to.
 func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title, username string) error {
 	_, err := p.pool.Exec(ctx,
 		`INSERT INTO tracked_chats (chat_id, chat_type, title, username, last_seen_at)
@@ -269,6 +269,15 @@ func (p *Postgres) TrackChat(ctx context.Context, chatID int64, chatType, title,
 	)
 	if err != nil {
 		return fmt.Errorf("track chat: %w", err)
+	}
+	return nil
+}
+
+// UntrackChat removes a chat the bot is no longer a member of.
+func (p *Postgres) UntrackChat(ctx context.Context, chatID int64) error {
+	_, err := p.pool.Exec(ctx, `DELETE FROM tracked_chats WHERE chat_id = $1`, chatID)
+	if err != nil {
+		return fmt.Errorf("untrack chat: %w", err)
 	}
 	return nil
 }

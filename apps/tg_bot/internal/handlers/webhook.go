@@ -95,11 +95,6 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 		if update.Message.Chat == nil {
 			return
 		}
-		if update.Message.Chat != nil {
-			if err := w.db.TrackChat(ctx, update.Message.Chat.ID, update.Message.Chat.Type, update.Message.Chat.Title, update.Message.Chat.Username); err != nil {
-				w.log.Error("failed to track chat", "error", err, "chat_id", update.Message.Chat.ID)
-			}
-		}
 		if err := w.db.RecordMessage(ctx, messageRecord(update.Message)); err != nil {
 			w.log.Error("failed to record message", "error", err, "chat_id", update.Message.Chat.ID, "message_id", update.Message.MessageID)
 		}
@@ -114,11 +109,6 @@ func (w *Webhook) dispatch(ctx context.Context, update *telegram.Update) {
 	case update.EditedMessage != nil:
 		if update.EditedMessage.Chat == nil {
 			return
-		}
-		if update.EditedMessage.Chat != nil {
-			if err := w.db.TrackChat(ctx, update.EditedMessage.Chat.ID, update.EditedMessage.Chat.Type, update.EditedMessage.Chat.Title, update.EditedMessage.Chat.Username); err != nil {
-				w.log.Error("failed to track chat", "error", err, "chat_id", update.EditedMessage.Chat.ID)
-			}
 		}
 		if err := w.db.RecordMessage(ctx, messageRecord(update.EditedMessage)); err != nil {
 			w.log.Error("failed to record edited message", "error", err, "chat_id", update.EditedMessage.Chat.ID, "message_id", update.EditedMessage.MessageID)
@@ -244,7 +234,34 @@ func (w *Webhook) trackBotChatMembership(ctx context.Context, update *telegram.C
 	if update.Chat.Type != "group" && update.Chat.Type != "supergroup" {
 		return
 	}
+	if update.NewChatMember.Status == "left" || update.NewChatMember.Status == "kicked" {
+		oldStatus := ""
+		if update.OldChatMember != nil {
+			oldStatus = update.OldChatMember.Status
+		}
+		if err := w.db.UntrackChat(ctx, update.Chat.ID); err != nil {
+			w.log.Error("failed to untrack removed bot chat",
+				"error", err,
+				"chat_id", update.Chat.ID,
+				"new_status", update.NewChatMember.Status,
+			)
+			return
+		}
+		w.log.Info("bot removed from chat, chat untracked",
+			"chat_id", update.Chat.ID,
+			"chat_type", update.Chat.Type,
+			"chat_title", update.Chat.Title,
+			"old_status", oldStatus,
+			"new_status", update.NewChatMember.Status,
+		)
+		return
+	}
+
 	if update.NewChatMember.Status != "member" && update.NewChatMember.Status != "administrator" {
+		w.log.Debug("ignoring bot chat membership update",
+			"chat_id", update.Chat.ID,
+			"new_status", update.NewChatMember.Status,
+		)
 		return
 	}
 
