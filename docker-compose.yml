@@ -94,6 +94,33 @@ services:
     networks:
       - backend
 
+  pgbackweb:
+    image: eduardolat/pgbackweb:latest
+    env_file:
+      - .env
+    ports:
+      - "8085:8085"
+    volumes:
+      - pgbackweb_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+
+  dbx:
+    image: t8y2/dbx:latest
+    env_file:
+      - .env
+    ports:
+      - "4224:4224"
+    volumes:
+      - dbx_data:/app/data
+    restart: unless-stopped
+    networks:
+      - backend
+
 networks:
   backend:
   traefik:
@@ -104,3 +131,5 @@ volumes:
   nats_data:
   postgres_data:
   whisper_models:
+  pgbackweb_backups:
+  dbx_data:
